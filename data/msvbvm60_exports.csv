@@ -1,0 +1,672 @@
+# MSVBVM60.DLL v6.00.9848 export function signatures
+# Reverse-engineered via BinaryNinja decompilation and disassembly analysis.
+#
+# Columns:
+#   name               - Export name (or rtcXxx for ordinal-only rtc* functions)
+#   ordinal            - Export ordinal (0 = named export, looked up by name)
+#   calling_convention - fastcall|stdcall|cdecl|special
+#   return_type        - void|int16|uint16|int32|uint32|int64|uint8|float|double|bool|Bstr|BstrPtr|VariantPtr|SafeArrayPtr|SafeArrayPtrPtr|IUnknownPtr|IUnknownPtrPtr|IDispatchPtr|IDispatchPtrPtr|Hresult|GuidPtr|VoidPtr|Int32Ptr|Int16Ptr|UInt8Ptr|Int64Ptr
+#   variadic           - 0|1 (1 = cdecl varargs)
+#   params             - Semicolon-separated: Type name (e.g. BstrPtr pbstr;Bstr src)
+#   category           - free|string|variant|convert|object|array|foreach|late|error|currency|fpu|file|misc|crt|fdiv|evtsink|entry|mem|internal
+#   notes              - Freeform RE notes
+name,ordinal,calling_convention,return_type,variadic,params,category,notes
+#
+# === FREE / CLEANUP ===
+#
+__vbaFreeObj,129,fastcall,void,0,VoidPtr ppobj,free,ecx=ppobj; *ppobj→Release then clear
+__vbaFreeObjList,243,cdecl,void,1,int32 count,free,varargs: count void** ptrs follow
+__vbaFreeStr,130,fastcall,void,0,BstrPtr pbstr,free,ecx=pbstr; *pbstr→SysFreeString then clear
+__vbaFreeStrList,244,cdecl,void,1,int32 count,free,varargs: count BSTR* ptrs follow
+__vbaFreeVar,131,fastcall,void,0,VariantPtr pvar,free,ecx=pvar; dispatches by vt (SysFreeString/Release/SafeArrayDestroy/VariantClear)
+__vbaFreeVarg,132,fastcall,void,0,,free,Frees a VARIANT arg; dispatches by vt: SysFreeString for BSTR; Release for objects; SafeArrayDestroy for arrays; else __vbaFreeVar
+__vbaFreeVarList,245,cdecl,void,1,int32 count,free,varargs: count VARIANT* ptrs follow
+#
+# === STRING OPERATIONS ===
+#
+__vbaInStr,277,stdcall,int32,0,int32 compare_mode;Bstr src;Bstr search;int32 start,string,InStr function; retn 0x10
+__vbaInStrB,278,stdcall,int32,0,int32 compare_mode;Bstr str1;Bstr str2;int32 start,string,InStrB (byte-level); binary search with memcmp
+__vbaInStrVar,279,stdcall,VariantPtr,0,VariantPtr presult;int32 compare_mode;VariantPtr pstr1;VariantPtr pstr2;int32 start,string,InStr for variants
+__vbaInStrVarB,280,stdcall,VariantPtr,0,VariantPtr presult;int32 compare_mode;VariantPtr pstr1;VariantPtr pstr2;int32 start,string,InStrB for variants
+__vbaLenBstr,327,stdcall,int32,0,Bstr bstr,string,returns char count (byte_len/2); retn 4
+__vbaLenBstrB,328,stdcall,int32,0,Bstr bstr,string,returns byte count (raw [bstr-4]); retn 4
+__vbaLenVar,329,stdcall,VariantPtr,0,VariantPtr pResult;VariantPtr pVar,string,0x6604c83a; retn 0x8; returns Len() of variant; coerces to string then calls __vbaLenBstr
+__vbaLenVarB,330,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pvar,string,LenB for variants; returns VT_I4 with byte count
+__vbaLineInputStr,331,stdcall,void,0,BstrPtr pdst;int16 fileNum,string,Line Input# statement
+__vbaLineInputVar,332,stdcall,void,0,VariantPtr pVar;int16 fileNum,string,0x660ea5f6; retn 0x8; reads a line into VARIANT (delegates to __vbaLineInputStr for BSTR subtype)
+__vbaLsetFixstr,333,stdcall,Bstr,0,uint32 fixedLen;Bstr dest;Bstr src,string,LSet for fixed strings; left-aligned with space padding
+__vbaLsetFixstrFree,334,stdcall,Bstr,0,uint32 fixedLen;Bstr dest;Bstr src,string,LSet wrapper; frees src after
+__vbaMidStmtBstr,335,stdcall,void,0,int32 destMaxChars;Bstr src;int32 len;int32 start;BstrPtr pdst,string,Mid$ statement (char-level)
+__vbaMidStmtBstrB,336,stdcall,void,0,int32 destMaxChars;Bstr src;int32 lenBytes;int32 startByte;BstrPtr pdst,string,Mid$ statement (byte-level); core impl
+__vbaMidStmtVar,337,stdcall,void,0,VariantPtr pdst;int32 len;int32 start;VariantPtr psrc,string,Mid$ for variants; doubles len/start and calls VarB
+__vbaMidStmtVarB,338,stdcall,void,0,VariantPtr pdst;int32 lenBytes;int32 startByte;VariantPtr psrc,string,Mid$ for variants (byte-level)
+__vbaR4Str,367,stdcall,float,0,Bstr bstr,string,BSTR→float via VarR4FromStr; returns on FPU st0
+__vbaRsetFixstr,392,stdcall,Bstr,0,uint32 fixedLen;Bstr dest;Bstr src,string,RSet for fixed strings; right-aligned with space padding
+__vbaRsetFixstrFree,393,stdcall,Bstr,0,uint32 fixedLen;Bstr dest;Bstr src,string,RSet wrapper; frees src after
+__vbaStr2Vec,396,stdcall,void,0,SafeArrayPtrPtr ppArray;Bstr bstr,string,BSTR→1D byte SAFEARRAY
+__vbaStrAryToAnsi,397,stdcall,VoidPtr,0,SafeArrayPtr ppArray;SafeArrayPtr ppAnsiArray,string,Wraps internal helper with direction=1 (to ANSI); converts SAFEARRAY of BSTRs to ANSI
+__vbaStrAryToUnicode,398,stdcall,VoidPtr,0,SafeArrayPtr ppArray;SafeArrayPtr ppUniArray,string,Wraps internal helper with direction=0 (to Unicode); converts SAFEARRAY of ANSI strings to BSTRs
+__vbaStrBool,399,stdcall,Bstr,0,int16 boolVal,string,Converts VB Boolean (int16) to BSTR via VariantChangeType(VT_BOOL->VT_BSTR)
+__vbaStrCat,405,stdcall,Bstr,0,Bstr bstr1;Bstr bstr2,string,concatenation via internal helper; retn 8
+__vbaStrCmp,406,stdcall,int32,0,Bstr bstr1;Bstr bstr2,string,binary compare wrapper; calls __vbaStrComp(0 bstr1 bstr2)
+__vbaStrComp,407,stdcall,int32,0,int32 mode;Bstr bstr1;Bstr bstr2,string,mode: 0=binary 1=text; retn 0xC
+__vbaStrCompVar,408,stdcall,VariantPtr,0,VariantPtr presult;int32 compare_mode;VariantPtr pvar1;VariantPtr pvar2,string,StrComp for variants; returns VT_I2
+__vbaStrCopy,138,fastcall,Bstr,0,BstrPtr pdst;Bstr src,string,ecx=pdst edx=src; SysAllocStringByteLen+SysFreeString
+__vbaStrCy,409,stdcall,Bstr,0,int64 cyVal,string,Converts Currency (8-byte CY) to BSTR via VarBstrFromCy
+__vbaStrDate,415,stdcall,Bstr,0,double dateVal,string,Converts DATE (double) to BSTR via VarBstrFromDate; respects calendar setting
+__vbaStrErrVarCopy,111,stdcall,Bstr,0,VariantPtr pVar,string,Thin wrapper around rtBstrFromErrVar; extracts error BSTR from Variant
+__vbaStrFixstr,416,stdcall,Bstr,0,Bstr bstrSrc;uint32 cchLen,string,Allocates fixed-length BSTR via SysAllocStringLen; error 0xe (out of memory) on failure
+__vbaStrI2,417,stdcall,Bstr,0,int16 value,string,int16→BSTR via VarBstrFromI2
+__vbaStrI4,418,stdcall,Bstr,0,int32 value,string,int32→BSTR via VarBstrFromI4
+__vbaStrLike,419,stdcall,int32,0,Bstr bstrText;Bstr bstrPattern,string,Case-sensitive Like comparison; passes mode=0 to internal __vbaLikeStr; returns bool as i32
+__vbaStrMove,139,fastcall,Bstr,0,BstrPtr pdst;Bstr src,string,ecx=pdst edx=src; moves ownership (no copy)
+__vbaStrR4,422,stdcall,Bstr,0,float value,string,float→BSTR via VarBstrFromR4
+__vbaStrR8,423,stdcall,Bstr,0,double value,string,double→BSTR via VarBstrFromR8
+__vbaStrTextCmp,424,stdcall,int32,0,Bstr bstr1;Bstr bstr2,string,text compare wrapper; calls __vbaStrComp(1 bstr1 bstr2)
+__vbaStrTextLike,425,stdcall,int32,0,Bstr bstrText;Bstr bstrPattern,string,Case-insensitive Like comparison; passes mode=1 to internal __vbaLikeStr; returns bool as i32
+__vbaStrToAnsi,426,stdcall,VoidPtr,0,VoidPtr ppAnsi;Bstr bstrSrc,string,Frees old *ppAnsi; converts Unicode BSTR to ANSI char*; returns ppAnsi content
+__vbaStrToUnicode,427,stdcall,Bstr,0,BstrPtr ppBstr;VoidPtr pszAnsi,string,Frees old *ppBstr via SysFreeString; converts ANSI to Unicode BSTR; returns new BSTR
+__vbaStrUI1,428,stdcall,Bstr,0,uint8 byteVal,string,Converts Byte to BSTR via VarBstrFromI2 (zero-extends to i16 first)
+__vbaStrVarCopy,429,stdcall,Bstr,0,VariantPtr pVar,string,Extracts BSTR from VARIANT; if vt!=VT_BSTR; coerces via VariantChangeType; duplicates via SysAllocStringByteLen
+__vbaStrVarMove,437,stdcall,Bstr,0,VariantPtr pvar,string,extracts BSTR from VT_BSTR variant (moves ownership); retn 4
+__vbaStrVarVal,438,stdcall,Bstr,0,BstrPtr pdst;VariantPtr pvar,string,extracts or converts variant to BSTR; retn 8
+__vbaVar2Vec,448,stdcall,void,0,SafeArrayPtrPtr ppArray;VariantPtr pvar,string,Variant(BSTR)→1D byte SAFEARRAY; calls __vbaStr2Vec
+rtcFormatCurrency,703,stdcall,Bstr,0,VariantPtr expression;int32 numDigitsAfterDecimal;int32 includeLeadingDigit;int32 useParensForNeg;int32 groupDigits,string,retn 0x14; FormatCurrency(); indirect call through function pointer
+rtcFormatDateTime,705,stdcall,Bstr,0,VariantPtr expression;int32 namedFormat,string,retn 0x8; FormatDateTime(); indirect call through function pointer
+rtcFormatNumber,702,stdcall,Bstr,0,VariantPtr expression;int32 numDigitsAfterDecimal;int32 includeLeadingDigit;int32 useParensForNeg;int32 groupDigits,string,retn 0x14; FormatNumber(); indirect call through function pointer
+rtcFormatPercent,704,stdcall,Bstr,0,VariantPtr expression;int32 numDigitsAfterDecimal;int32 includeLeadingDigit;int32 useParensForNeg;int32 groupDigits,string,retn 0x14; FormatPercent(); indirect call through function pointer
+rtcHexBstrFromVar,572,stdcall,Bstr,0,VariantPtr pVar,string,retn 0x4; converts variant to hex string BSTR
+rtcHexVarFromVar,573,stdcall,void,0,VariantPtr pResult;VariantPtr pVar,string,retn 0x8; wraps rtcHexBstrFromVar; returns VT_BSTR VARIANT
+rtcInStr,630,stdcall,void,0,VariantPtr pResult;VariantPtr start;VariantPtr string1;VariantPtr string2;VariantPtr compare,string,retn 0x14; InStr with all-VARIANT args; returns VARIANT
+rtcInStrChar,633,stdcall,void,0,VariantPtr pResult;VariantPtr start;VariantPtr string1;VariantPtr string2;int32 compare,string,retn 0x14; InStr with int compare mode; returns VARIANT
+rtcInStrRev,709,stdcall,int32,0,Bstr string1;Bstr string2;int32 start;int32 compare,string,retn 0x10; searches from right; returns position as int32
+rtcJoin,710,stdcall,Bstr,0,VariantPtr sourceArray;VariantPtr delimiter,string,retn 0x8; joins array elements with delimiter; returns BSTR
+rtcLeftBstr,512,stdcall,Bstr,0,Bstr string;int32 length,string,retn 0x8; returns leftmost length bytes of string via SysAllocStringByteLen
+rtcLeftCharBstr,616,stdcall,Bstr,0,Bstr string;int32 length,string,retn 0x8; wrapper doubles length then calls rtcLeftBstr (char=2 bytes)
+rtcLeftCharVar,617,stdcall,void,0,VariantPtr pResult;VariantPtr pString;int32 length,string,retn 0xc; doubles length and calls rtcLeftVar
+rtcLeftTrimBstr,521,stdcall,Bstr,0,Bstr string,string,retn 0x4; trims leading whitespace; returns new BSTR
+rtcLeftTrimVar,522,stdcall,void,0,VariantPtr pResult;VariantPtr pString,string,retn 0x8; wraps rtcLeftTrimBstr; returns VT_BSTR VARIANT
+rtcLeftVar,513,stdcall,void,0,VariantPtr pResult;VariantPtr pString;int32 length,string,retn 0xc; extracts string from VARIANT; calls rtcLeftBstr; returns VT_BSTR VARIANT
+rtcLenCharVar,653,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc,string,retval via hidden ptr; calls __vbaLenVar; retn 0x8
+rtcLenVar,654,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc,string,retval via hidden ptr; calls __vbaLenVarB; retn 0x8
+rtcLowerCaseBstr,517,stdcall,Bstr,0,Bstr bstr,string,no frame ptr; SysAllocStringLen + lowercase fill; retn 0x4
+rtcLowerCaseVar,518,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr psrc,string,VB6 LCase$()
+rtcMidBstr,628,stdcall,Bstr,0,Bstr bstr;int32 start;VariantPtr pvarLen,string,no frame ptr; SysAllocStringByteLen; optional len via VARIANT; retn 0xc
+rtcMidCharBstr,631,stdcall,Bstr,0,Bstr bstr;int32 start;VariantPtr pvarLen,string,push ebp; char-based mid; delegates to rtcMidBstr after doubling start; retn 0xc
+rtcMidCharVar,632,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr psrc;int32 start;int32 length,string,VB6 Mid$()
+rtcMidVar,629,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc;int32 start;VariantPtr pvarLen,string,push ebp; retval via hidden ptr; calls rtcMidBstr; retn 0x10
+rtcOctBstrFromVar,574,stdcall,Bstr,0,VariantPtr pvarSrc,string,push ebp; converts variant to octal BSTR via TLS; retn 0x4
+rtcOctVarFromVar,575,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc,string,push ebp; calls rtcOctBstrFromVar; wraps result in VARIANT; retn 0x8
+rtcReplace,712,stdcall,Bstr,0,Bstr bstrExpr;Bstr bstrFind;Bstr bstrReplace;int32 start;int32 count;int32 compare,string,push ebp; compare mode resolution; delegates to internal replacer; retn 0x18
+rtcRightBstr,514,stdcall,Bstr,0,Bstr bstr;int32 length,string,no frame ptr; SysAllocStringByteLen from tail; retn 0x8
+rtcRightCharBstr,618,stdcall,Bstr,0,Bstr bstr;int32 length,string,no frame ptr; doubles length then calls rtcRightBstr; retn 0x8
+rtcRightCharVar,619,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc;int32 length,string,push ebp; doubles length; delegates to rtcRightVar; retn 0xc
+rtcRightTrimBstr,523,stdcall,Bstr,0,Bstr bstr,string,push ebp; trims trailing spaces via internal helper; retn 0x4
+rtcRightTrimVar,524,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc,string,push ebp; TLS variant coerce; calls rtcRightTrimBstr; retn 0x8
+rtcRightVar,515,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc;int32 length,string,push ebp; TLS variant coerce; calls rtcRightBstr; retn 0xc
+rtcSpaceBstr,525,stdcall,Bstr,0,int32 count,string,no frame ptr; SysAllocStringLen + fill 0x20; retn 0x4
+rtcSpaceVar,526,stdcall,void,0,VariantPtr pvarResult;int32 count,string,push ebp; calls rtcSpaceBstr; wraps in VARIANT(VT_BSTR); retn 0x8
+rtcSplit,711,stdcall,VariantPtr,0,VariantPtr retval;VariantPtr pExpression;VariantPtr pDelimiter;int32 nLimit;int32 nCompareMethod,string,retn 0x14; VB Split(); creates SafeArray of BSTR
+rtcStrConvVar,622,stdcall,VariantPtr,0,VariantPtr retval;VariantPtr pSrcVar;int32 nConversion,string,retn 0xc; delegates to rtcStrConvVar2 with nLocaleID=0
+rtcStrConvVar2,717,stdcall,VariantPtr,0,VariantPtr retval;VariantPtr pSrcVar;int32 nConversion;int32 nLocaleID,string,retn 0x10; VB StrConv() with locale; uses GetLocaleInfoA; LCMapString
+rtcStrFromVar,536,stdcall,Bstr,0,VariantPtr pSrcVar,string,retn 0x4; VB Str() on variant; coerces to string with leading-space formatting
+rtcStringBstr,606,stdcall,Bstr,0,int32 nRepeat;VariantPtr pCharVar,string,retn 0x8; VB String$(n; char); fills BSTR with repeated character
+rtcStringVar,607,stdcall,VariantPtr,0,VariantPtr retval;int32 nRepeat;VariantPtr pCharVar,string,retn 0xc; Variant wrapper for rtcStringBstr
+rtcStrReverse,713,stdcall,Bstr,0,Bstr bstrSrc,string,retn 0x4; VB StrReverse(); allocates new BSTR; copies chars in reverse
+rtcTrimBstr,519,stdcall,Bstr,0,Bstr bstrSrc,string,retn 0x4; VB Trim$(); delegates to internal trimmer
+rtcTrimVar,520,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr psrc,string,VB6 Trim$()
+rtcUpperCaseBstr,527,stdcall,Bstr,0,Bstr bstrSrc,string,retn 0x4; VB UCase$(); delegates to internal case converter
+rtcUpperCaseVar,528,stdcall,VariantPtr,0,VariantPtr retval;VariantPtr pSrcVar,string,retn 0x8; Variant wrapper; calls rtcUpperCaseBstr internally
+rtcVarFromFormatVar,660,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr psrc;VariantPtr format,string,VB6 Format$()
+#
+# === TYPE CONVERSION ===
+#
+__vbaBoolErrVar,109,stdcall,int32,0,VariantPtr pVar,convert,Calls rtBoolFromErrVar; movsx result; retn 4
+__vbaBoolStr,174,stdcall,int16,0,Bstr bstr,convert,BSTR→VARIANT_BOOL via VarBoolFromStr
+__vbaBoolVar,175,stdcall,int16,0,VariantPtr pvar,convert,variant→bool; uses VariantChangeTypeEx (VT_BOOL=0xB)
+__vbaBoolVarNull,176,stdcall,int32,0,VariantPtr pvar,convert,variant→bool (null-aware); optimized inline VT dispatch
+__vbaDateR4,206,stdcall,double,0,float value,convert,Widens float->double; range checks VB date bounds; retn 4
+__vbaDateR8,207,stdcall,double,0,double val,convert,range-checks double against DATE bounds; returns on ST(0)
+__vbaDateStr,208,stdcall,double,0,Bstr pStr,convert,Calls VarDateFromStr (fallback VarR8FromStr + range check); retn 4
+__vbaDateVar,209,stdcall,double,0,VariantPtr pvar,convert,variant→date; calls __vbaVarDateVar then loads qword to ST(0)
+__vbaI2Abs,133,fastcall,int16,0,int16 value,convert,Negates if negative; overflow -> error 6
+__vbaI2Cy,259,stdcall,int16,0,int64 cyValue,convert,fild qword; fdiv 10000.0; call __vbaFpI2; retn 8
+__vbaI2ErrVar,260,stdcall,int16,0,VariantPtr pVar,convert,Dispatches via vtype jump table; entry thunk loads ECX=vtable; jmps to shared dispatcher
+__vbaI2ForNextCheck,261,stdcall,int32,0,,convert,export exists at ordinal 35; integer For/Next boundary check for Int16
+__vbaI2I4,134,fastcall,int16,0,int32 val,convert,ecx=val; int32→int16 with overflow check; raises error 6
+__vbaI2Sgn,135,fastcall,int32,0,int16 value,convert,Branchless: returns -1/0/1; bare retn
+__vbaI2Str,262,stdcall,int16,0,Bstr pStr,convert,Calls VarI2FromStr; retn 4
+__vbaI2Var,263,stdcall,int16,0,VariantPtr pvar,convert,variant→int16; dispatch table on VT
+__vbaI4Abs,136,fastcall,int32,0,int32 val,convert,ecx=val; absolute value; raises error 6 if INT_MIN
+__vbaI4Cy,264,stdcall,int32,0,int64 cyValue,convert,fild qword; fdiv 10000.0; call __vbaFpI4; retn 8
+__vbaI4ErrVar,267,stdcall,int32,0,VariantPtr pvar,convert,error variant→int32; shared dispatch body
+__vbaI4ForNextCheck,270,stdcall,int32,0,,convert,export exists at ordinal 172; integer For/Next boundary check for Int32
+__vbaI4Sgn,137,fastcall,int32,0,int32 value,convert,Branchless: returns -1/0/1; bare retn
+__vbaI4Str,272,stdcall,int32,0,Bstr pStr,convert,Calls VarI4FromStr; retn 4
+__vbaI4Var,273,stdcall,int32,0,VariantPtr pvar,convert,variant→int32; shared dispatch body with I2Var
+__vbaR4Cy,363,stdcall,float,0,int64 cyValue,convert,fild qword; fdiv 10000.0f; retn 8; returns float in ST0
+__vbaR4ErrVar,364,stdcall,float,0,VariantPtr pVar,convert,Like R4Var but with Error variant support; thunk -> shared dispatcher
+__vbaR4ForNextCheck,365,stdcall,int32,0,float counter;float limit;float step,convert,0x66112f1e; retn 0xc; For/Next loop check for Single; compares step sign; returns -1 (continue) or 0 (done)
+__vbaR4Sgn,366,stdcall,int16,0,float value,convert,Compares with 0.0f; returns -1/0/1 in AX; retn 4
+__vbaR4Var,368,stdcall,float,0,VariantPtr pVar,convert,Dispatches via vtype jump table; returns float in ST0; retn 4
+__vbaR8Cy,369,stdcall,double,0,int64 cyValue,convert,Identical body to R4Cy but divides by 10000.0f returning double; retn 8
+__vbaR8ErrVar,370,stdcall,double,0,VariantPtr pVar,convert,Like R8Var but with Error variant support; thunk -> shared dispatcher
+__vbaR8FixI2,371,cdecl,int16,0,VoidPtr ST0,convert,Calls __vbaFPFix; fistp word; bare retn; input in FPU ST0
+__vbaR8FixI4,372,cdecl,int32,0,VoidPtr ST0,convert,Calls __vbaFPFix; fistp dword; bare retn; input in FPU ST0
+__vbaR8IntI2,374,cdecl,int16,0,VoidPtr ST0,convert,Calls __vbaFPInt; fistp word; bare retn; input in FPU ST0
+__vbaR8IntI4,375,cdecl,int32,0,VoidPtr ST0,convert,Calls __vbaFPInt; fistp dword; bare retn; input in FPU ST0
+__vbaR8Sgn,376,stdcall,int16,0,double value,convert,Compares with 0.0; returns -1/0/1 in AX; retn 8
+__vbaR8Str,377,stdcall,double,0,Bstr pStr,convert,Calls VarR8FromStr; retn 4
+__vbaR8Var,378,stdcall,double,0,VariantPtr pvar,convert,variant→double; returns on FPU ST(0)
+__vbaUI1Cy,439,stdcall,uint8,0,int64 cyValue,convert,fild qword; fdiv 10000.0; call __vbaFpUI1; retn 8
+__vbaUI1ErrVar,442,stdcall,uint8,0,VariantPtr pVar,convert,Like UI1Var but with Error variant support; thunk -> shared dispatcher
+__vbaUI1I2,140,fastcall,uint8,0,int16 val,convert,ecx=val; int16→uint8 with overflow check; raises error 6
+__vbaUI1I4,141,fastcall,uint8,0,int32 value,convert,Range checks value<=0xFF; overflow -> error 6; bare retn
+__vbaUI1Sgn,142,fastcall,int32,0,uint8 value,convert,Branchless: returns 0 or 1 (unsigned byte can't be negative); bare retn
+__vbaUI1Str,443,stdcall,uint8,0,Bstr pStr,convert,Calls __vbaI2Str then range-checks <=0xFF; retn 4
+__vbaUI1Var,444,stdcall,uint8,0,VariantPtr pVar,convert,Dispatches via vtype jump table; range checks 0-255; thunk -> shared dispatcher
+__vbaVarDateVar,459,stdcall,VariantPtr,0,VariantPtr pdest;VariantPtr psrc,convert,coerces src to VT_DATE into dest VARIANT
+rtcAbsVar,656,stdcall,void,0,VariantPtr result;VariantPtr var,convert,retn 0x8; wraps __vbaVarAbs; writes 16-byte VARIANT to result ptr
+rtcBstrFromError,651,stdcall,Bstr,0,VariantPtr errVar,convert,retn 0x4; error code to message string via LoadString/SysAllocString
+rtcFixVar,655,stdcall,void,0,VariantPtr result;VariantPtr var,convert,retn 0x8; wraps __vbaVarFix; truncates toward zero
+rtcIntVar,657,stdcall,void,0,VariantPtr pResult;VariantPtr pVar,convert,retn 0x8; calls __vbaVarInt; returns truncated integer VARIANT
+rtcR8ValFromBstr,581,stdcall,double,0,Bstr bstr,convert,push ebp; strips whitespace then calls VariantChangeTypeEx; FPU return; retn 0x4
+rtcRound,714,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc;int32 numDigits,convert,push ebp; calls VarRound (OLEAUT32); retval via hidden ptr; retn 0xc
+rtcSgnVar,658,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarSrc,convert,push ebp; sign of variant; returns -1/0/1 in VARIANT; switch table; retn 0x8
+rtcVarBstrFromAnsi,608,stdcall,VariantPtr,0,VariantPtr retval;int32 nAnsiCode,convert,retn 0x8; wraps rtcBstrFromAnsi result in VARIANT(VT_BSTR)
+rtcVarBstrFromByte,695,stdcall,VariantPtr,0,VariantPtr retval;uint16 nByte,convert,retn 0x8; wraps rtcBstrFromByte result in VARIANT(VT_BSTR)
+rtcVarBstrFromChar,698,stdcall,VariantPtr,0,VariantPtr retval;uint16 nChar,convert,retn 0x8; wraps rtcBstrFromChar result in VARIANT(VT_BSTR)
+rtcVarDateFromVar,687,stdcall,VariantPtr,0,VariantPtr retval;VariantPtr pSrcVar,convert,retn 0x8; VB CDate() variant; calls __vbaVarDateVar
+rtcVarFromError,652,stdcall,VariantPtr,0,VariantPtr retval;int32 nErrorCode,convert,retn 0x8; wraps rtcBstrFromError in VARIANT(VT_BSTR)
+rtcVarFromVar,642,stdcall,VariantPtr,0,VariantPtr retval;VariantPtr pSrcVar,convert,retn 0x8; copies VARIANT via VariantCopyInd
+rtcVarStrFromVar,613,stdcall,VariantPtr,0,VariantPtr retval;VariantPtr pSrcVar,convert,retn 0x8; Variant wrapper for rtcStrFromVar; handles Null->Null
+#
+# === OBJECT OPERATIONS ===
+#
+__vbaCastObj,178,stdcall,VoidPtr,0,IUnknownPtr pobj;VoidPtr piid,object,QueryInterface wrapper; returns requested interface
+__vbaCastObjVar,179,stdcall,VoidPtr,0,VariantPtr pvar;VoidPtr piid,object,extracts obj from VT_DISPATCH/VT_UNKNOWN variant then QI
+__vbaCheckType,180,stdcall,int32,0,IUnknownPtr pobj;VoidPtr piid,object,QI to piid; succeeds→Release and return -1; fails→return 0
+__vbaCheckTypeVar,181,stdcall,int32,0,VariantPtr pVar;VoidPtr pGuid,object,Extracts IDispatch; QueryInterface with GUID; returns -1 match / 0 no match; retn 8
+__vbaNew,341,stdcall,IUnknownPtr,0,VoidPtr pClassDesc,object,creates object from class descriptor
+__vbaNew2,340,stdcall,void,0,VoidPtr pClassDesc;IUnknownPtrPtr ppobj,object,creates object and stores into *ppobj
+__vbaObjAddref,347,stdcall,VoidPtr,0,VariantPtr pVar,object,Extracts IDispatch* from VT_DISPATCH variant (handles VT_BYREF); returns object ptr in EAX; retn 4. Despite name; does NOT call AddRef.
+__vbaObjIs,348,stdcall,int32,0,IUnknownPtr pobj1;IUnknownPtr pobj2,object,QI both to IUnknown and compare identity; -1=same 0=different
+__vbaObjSet,349,stdcall,IUnknownPtr,0,IUnknownPtrPtr ppobj;IUnknownPtr pnew,object,releases old (flag=1) stores new; returns *ppobj
+__vbaObjSetAddref,350,stdcall,IUnknownPtr,0,IUnknownPtrPtr ppobj;IUnknownPtr pnew,object,AddRefs new without releasing old (flag=0); returns *ppobj
+__vbaObjVar,351,stdcall,VoidPtr,0,VariantPtr pVar,object,NOTE: export at 0x6600b6ca shares address with __vbaPrintFile (file I/O function). Likely export table alias collision. Code at that address is a Print operation; not object extraction.
+__vbaUdtVar,446,stdcall,VoidPtr,0,VoidPtr pRecInfo;VariantPtr pvar,object,extracts UDT record data from VT_RECORD variant
+__vbaUnkVar,447,stdcall,IUnknownPtr,0,VariantPtr pvar,object,extracts IUnknown* from VT_DISPATCH/VT_UNKNOWN variant
+#
+# === VARIANT OPERATIONS ===
+#
+__vbaVarAbs,449,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pvar,variant,calls VarAbs via [0x66119848]; retn 8
+__vbaVarAdd,450,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarAdd
+__vbaVarAnd,451,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarAnd
+__vbaVarCat,452,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,string concat; handles calendar/date coercion
+__vbaVarCmpEq,453,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,binary; writes VT_BOOL; NULL→VT_NULL; lookup 0x6601d9a4
+__vbaVarCmpGe,454,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,binary; writes VT_BOOL; NULL→VT_NULL; lookup 0x6601d9c4
+__vbaVarCmpGt,455,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,binary; writes VT_BOOL; NULL→VT_NULL; lookup 0x6601d9b0
+__vbaVarCmpLe,456,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,binary; writes VT_BOOL; NULL→VT_NULL; lookup 0x6601d9c8
+__vbaVarCmpLt,457,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,writes VT_BOOL result variant; handles NULL→VT_NULL
+__vbaVarCmpNe,458,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,writes VT_BOOL result variant; handles NULL→VT_NULL
+__vbaVarCopy,143,fastcall,VariantPtr,0,VariantPtr pdst;VariantPtr psrc,variant,ecx=dst edx=src; deep copy (BSTR dup/IUnknown AddRef/ByRef deref)
+__vbaVarDiv,460,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarDiv
+__vbaVarDup,144,fastcall,VariantPtr,0,VariantPtr pdst;VariantPtr psrc,variant,ecx=dst edx=src; fast memcpy 16 bytes for simple types
+__vbaVarEqv,461,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,calls VarEqv via [0x66119828]; retn 0xC
+__vbaVarErrI4,462,stdcall,VariantPtr,0,VariantPtr presult;int32 errcode,variant,creates VT_ERROR (vt=0xA); errcode OR'd with 0x800a0000; validates 0..0xffff; retn 8
+__vbaVarFix,463,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pvar,variant,calls VarFix via [0x6611984c]; retn 8
+__vbaVarForInit,464,stdcall,int32,0,VariantPtr pcounter;VariantPtr pstart;VariantPtr plimit;VariantPtr pstep;VariantPtr ploopvar;int32 flags,variant,For...Next init; 6 params
+__vbaVarForNext,465,stdcall,int32,0,VariantPtr pcounter;VariantPtr pstep;VariantPtr plimit,variant,For...Next step; returns 0=continue -1=exit
+__vbaVargObj,510,stdcall,VariantPtr,0,VariantPtr pVar;IDispatchPtr pObj,variant,Sets pVar to VT_DISPATCH with AddRef; if already holds obj; releases old first
+__vbaVargObjAddref,511,stdcall,VariantPtr,0,VariantPtr pVar;IDispatchPtr pObj,variant,Like VargObj but does NOT AddRef the source (flag=0 to internal helper)
+__vbaVargParmRef,148,fastcall,VariantPtr,0,,variant,Dereferences VT_BYREF|VT_VARIANT; if flag set returns pVar->pvarVal; else returns pVar
+__vbaVargUnk,602,stdcall,VariantPtr,0,VariantPtr pVar;IUnknownPtr pUnk,variant,Sets pVar to VT_UNKNOWN with AddRef; parallel to VargObj for IUnknown
+__vbaVargUnkAddref,603,stdcall,VariantPtr,0,VariantPtr pVar;IUnknownPtr pUnk,variant,Like VargUnk but does NOT AddRef (flag=0)
+__vbaVargVar,149,fastcall,VariantPtr,0,VoidPtr pDstVar),variant,Copies 16-byte VARIANT from ecx to pDstVar; if not VT_BYREF; sets VT_BYREF|VT_VARIANT pointing to src
+__vbaVargVarCopy,150,fastcall,VariantPtr,0,,variant,Copies VARIANT via internal helper with flag=0 (deep copy); returns pSrcVar in eax
+__vbaVargVarMove,151,fastcall,VariantPtr,0,,variant,Moves VARIANT via internal helper with flag=1 (move/steal); returns pSrcVar
+__vbaVargVarRef,152,fastcall,VariantPtr,0,,variant,Copies 16 bytes from pSrcVar to pDstVar; if not VT_BYREF; makes it VT_BYREF|VT_VARIANT
+__vbaVarIdiv,466,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarIdiv
+__vbaVarImp,467,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,calls VarImp via [0x66119830]; retn 0xC
+__vbaVarIndexLoad,468,cdecl,VariantPtr,1,VariantPtr presult;int32 cDims;VariantPtr parray,variant,bare retn; variadic indices
+__vbaVarIndexLoadRef,469,cdecl,VariantPtr,1,VariantPtr presult;int32 cDims;VariantPtr parray,variant,bare retn; frees presult if non-empty first
+__vbaVarIndexLoadRefLock,470,cdecl,VariantPtr,1,VariantPtr presult;int32 cDims;VariantPtr parray,variant,bare retn; frees presult if non-empty; locks array data
+__vbaVarIndexStore,471,cdecl,VariantPtr,1,VariantPtr pvalue;int32 cDims;VariantPtr parray,variant,bare retn; push flags=4; store value at index
+__vbaVarIndexStoreObj,472,cdecl,VariantPtr,1,VariantPtr pvalue;int32 cDims;VariantPtr parray,variant,bare retn; push flags=8; Set store at index
+__vbaVarInt,473,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pvar,variant,calls VarInt via [0x66119850]; retn 8
+__vbaVarLike,474,stdcall,int32,0,VariantPtr pstring;VariantPtr ppattern,variant,Like operator (binary compare); flag=0
+__vbaVarLikeVar,475,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pstring;VariantPtr ppattern,variant,binary Like; push flag=0; calls LikeHelper; writes result variant; retn 0xC
+__vbaVarMod,476,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,calls VarMod via [0x66119834]; retn 0xC
+__vbaVarMove,145,fastcall,VariantPtr,0,VariantPtr pdst;VariantPtr psrc,variant,ecx=dst edx=src; frees dst then moves src; zeroes src vt
+__vbaVarMul,477,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarMul
+__vbaVarNeg,478,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr poperand,variant,unary; thin wrapper over VarNeg
+__vbaVarNot,479,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr poperand,variant,unary; thin wrapper over VarNot
+__vbaVarOr,480,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarOr
+__vbaVarPow,481,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarPow
+__vbaVarSetObj,482,stdcall,VariantPtr,0,VariantPtr pdst;IDispatchPtr pobj,variant,frees dst; sets VT_DISPATCH(9); ObjSet flag=1 (release old)
+__vbaVarSetObjAddref,483,stdcall,VariantPtr,0,VariantPtr pdst;IDispatchPtr pobj,variant,frees dst; sets VT_DISPATCH(9); ObjSet flag=0 (no release)
+__vbaVarSetUnk,484,stdcall,VariantPtr,0,VariantPtr pdst;IUnknownPtr punk,variant,frees dst; sets VT_UNKNOWN(0xd); ObjSet flag=1
+__vbaVarSetUnkAddref,485,stdcall,VariantPtr,0,VariantPtr pdst;IUnknownPtr punk,variant,frees dst; sets VT_UNKNOWN(0xd); ObjSet flag=0
+__vbaVarSetVar,486,stdcall,VariantPtr,0,VariantPtr pdst;VariantPtr psrc,variant,calls internal VarCopyObj addref flag=1; retn 8
+__vbaVarSetVarAddref,487,stdcall,VariantPtr,0,VariantPtr pdst;VariantPtr psrc,variant,calls internal VarCopyObj addref flag=0; retn 8
+__vbaVarSub,488,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,thin wrapper over VarSub
+__vbaVarTextCmpEq,489,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,text; writes VT_BOOL; NULL→VT_NULL
+__vbaVarTextCmpGe,490,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,text; writes VT_BOOL; NULL→VT_NULL
+__vbaVarTextCmpGt,491,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,text; writes VT_BOOL; NULL→VT_NULL
+__vbaVarTextCmpLe,492,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,text; writes VT_BOOL; NULL→VT_NULL
+__vbaVarTextCmpLt,493,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,text; writes VT_BOOL; NULL→VT_NULL
+__vbaVarTextCmpNe,494,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,text; writes VT_BOOL; NULL→VT_NULL
+__vbaVarTextLike,495,stdcall,int32,0,VariantPtr pstring;VariantPtr ppattern,variant,Like operator (text compare); flag=1
+__vbaVarTextLikeVar,496,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pstring;VariantPtr ppattern,variant,text Like; push flag=1; calls LikeHelper; writes result variant; retn 0xC
+__vbaVarTextTstEq,497,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,text cmp mode=1; lookup 0x6601d9a4; 0/-1
+__vbaVarTextTstGe,498,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,text cmp mode=1; lookup 0x6601d9c4; 0/-1
+__vbaVarTextTstGt,499,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,text cmp mode=1; lookup 0x6601d9b0; 0/-1
+__vbaVarTextTstLe,500,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,text cmp mode=1; lookup 0x6601d9c8; 0/-1
+__vbaVarTextTstLt,501,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,text cmp mode=1; lookup 0x6601d9a8; 0/-1
+__vbaVarTextTstNe,502,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,text cmp mode=1; lookup 0x6601d9b8; 0/-1
+__vbaVarTstEq,503,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,test equality; returns 0 or -1
+__vbaVarTstGe,504,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,binary cmp mode=0; lookup 0x6601d9c4; 0/-1
+__vbaVarTstGt,505,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,test greater than; returns 0 or -1
+__vbaVarTstLe,506,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,test less or equal; returns 0 or -1
+__vbaVarTstLt,507,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,test less than; returns 0 or -1
+__vbaVarTstNe,508,stdcall,int32,0,VariantPtr pleft;VariantPtr pright,variant,test not equal; returns 0 or -1
+__vbaVarVargNofree,146,fastcall,VariantPtr,0,VariantPtr pdst;VariantPtr psrc,variant,ecx=dst edx=src; resolves VT_VARIANT|VT_BYREF; no free on dst
+__vbaVarXor,509,stdcall,VariantPtr,0,VariantPtr presult;VariantPtr pleft;VariantPtr pright,variant,calls VarXor via [0x66119844]; retn 0xC
+__vbaVerifyVarObj,604,stdcall,VariantPtr,0,VariantPtr pvar,variant,validates VT_DISPATCH(9) or VT_UNKNOWN(0xd) with VT_BYREF mask (0xbfff); error 0x1a8 if invalid; retn 4
+#
+# === ARRAY OPERATIONS ===
+#
+__vbaAryConstruct,165,stdcall,void,0,SafeArrayPtr ppAry;VoidPtr pDescriptor,array,Thin wrapper: calls sub_660482ba(ppAry; pDescriptor; 0) then error handler. Creates array from descriptor with no extra bounds. retn 0x8.
+__vbaAryConstruct2,164,stdcall,void,0,SafeArrayPtr ppAry;VoidPtr pDescriptor;VoidPtr pBounds,array,Like AryConstruct but with explicit bounds pointer (3rd param). If descriptor has FADF_AUTO (0x20) bit; dereferences pBounds. retn 0xc.
+__vbaAryCopy,166,stdcall,void,0,SafeArrayPtr ppDst;SafeArrayPtr ppSrc,array,Erases dst if different from src; then copies src array to dst via SafeArrayCopy. retn 0x8.
+__vbaAryDestruct,167,stdcall,void,0,uint16 arrayDesc;SafeArrayPtrPtr ppArray,array,calls __vbaErase then SafeArrayDestroyData
+__vbaAryLock,108,stdcall,SafeArrayPtr,0,SafeArrayPtr ppLocked;SafeArrayPtr psa,array,Calls SafeArrayLock(psa); stores psa into *ppLocked; returns psa. Raises error 9 if psa is NULL. retn 0x8.
+__vbaAryMove,168,stdcall,void,0,SafeArrayPtrPtr ppdst;SafeArrayPtrPtr ppsrc,array,erases dst; moves src ptr to dst; NULLs src
+__vbaAryRebase1Var,169,stdcall,VariantPtr,0,VariantPtr pVar,array,If pVar holds VT_ARRAY|VT_VARIANT (0x200c) with a 1-dim SAFEARRAY; sets lLbound=1 (Option Base 1). retn 0x4.
+__vbaAryRecCopy,170,stdcall,void,0,VoidPtr pRecInfo;SafeArrayPtr ppDst;SafeArrayPtr ppSrc,array,Copies a record (UDT) array. Uses pRecInfo for element-level copy semantics. Erases dst first if needed. retn 0xc.
+__vbaAryRecMove,171,stdcall,void,0,VoidPtr pRecInfo;SafeArrayPtr ppDst;SafeArrayPtr ppSrc,array,Moves a record (UDT) array. Erases dst; then moves src pointer to dst and zeroes src. retn 0xc.
+__vbaAryUnlock,172,stdcall,void,0,SafeArrayPtr ppLocked,array,Calls SafeArrayUnlock(*ppLocked); then zeroes *ppLocked. retn 0x4.
+__vbaAryVar,173,stdcall,SafeArrayPtr,0,uint16 vt;VariantPtr pVar,array,Extracts SAFEARRAY* from a VARIANT. Validates VT_ARRAY bit (0x2000); handles VT_BYREF indirection. Validates element type matches vt. retn 0x8.
+__vbaAryVarVarg,117,fastcall,VariantPtr,0,VariantPtr pDst;int32 cArgs,array,Wraps a varg array into a VARIANT. Sets pDst->vt=VT_ARRAY|VT_VARIANT (0x200c); calls internal to build SAFEARRAY from stack args. bare retn.
+__vbaCVarAryUdt,177,stdcall,VariantPtr,0,VoidPtr pRecInfo;VariantPtr pDst;int32 vt;SafeArrayPtr ppAry,array,Converts a UDT array to a VARIANT. Creates SAFEARRAY descriptor if needed; sets element size/type; copies IRecordInfo. Stores result in pDst. retn 0x10.
+__vbaDerefAry,210,cdecl,VoidPtr,1,uint16 cDims;SafeArrayPtr psa,array,Multi-dimensional array element dereference. Variadic indices follow on stack. Validates dims/bounds; computes pvData + element offset. bare retn (cdecl; caller cleans).
+__vbaDerefAry1,211,stdcall,VoidPtr,0,SafeArrayPtr psa;int32 index,array,1-dimensional array element dereference. Validates dims==1 and bounds; returns pvData + cbElements*(index-lLbound). retn 0x8.
+__vbaErase,213,stdcall,void,0,uint16 arrayDesc;SafeArrayPtrPtr ppArray,array,calls SafeArrayDestroyData
+__vbaEraseKeepData,214,stdcall,void,0,int32 fCleanup;SafeArrayPtr ppAry,array,Erases array data but keeps the descriptor. Sets FADF_FIXEDSIZE|FADF_STATIC (0x12) before erase; clears after. retn 0x8.
+__vbaEraseNoPop,215,stdcall,void,0,SafeArrayPtr ppAry,array,Validates array not locked (fFeatures & 0x16 == 0); then calls __vbaErase(0; ppAry). retn 0x4.
+__vbaLbound,325,stdcall,int32,0,int16 dimension;SafeArrayPtr psa,array,Returns lLbound for the given 1-based dimension. Validates dimension >= 1 and <= cDims. retn 0x8.
+__vbaLdZeroAry,326,stdcall,SafeArrayPtr,0,SafeArrayPtr ppAry;VoidPtr pTemplate,array,Destroys existing array via SafeArrayDestroy; allocates new SAFEARRAY descriptor from template; copies bounds and element info; transfers pvData. retn 0x8.
+__vbaRedim,385,cdecl,SafeArrayPtr,1,uint32 flags;uint32 arrayDesc;SafeArrayPtrPtr ppArray;uint32 elemSize;uint32 numDims,array,variadic dim bounds (lbound;ubound pairs) follow numDims
+__vbaRedimPreserve,386,cdecl,SafeArrayPtr,1,uint32 flags;uint32 arrayDesc;SafeArrayPtrPtr ppArray;uint32 elemSize;uint32 numDims,array,same as Redim with preserve semantics
+__vbaRedimPreserveVar,387,cdecl,SafeArrayPtr,1,uint32 flags;SafeArrayPtr ppsa;uint16 vt;uint32 numDims;VoidPtr pBounds,array,0x660417cc; same entry as __vbaRedim; flag 0x20 bit determines preserve behavior
+__vbaRedimPreserveVar2,388,cdecl,SafeArrayPtr,1,uint32 flags;SafeArrayPtr ppsa;uint16 vt;uint32 numDims;VoidPtr pBounds,array,0x66014f60; same entry as __vbaRedimPreserve
+__vbaRedimVar,389,cdecl,VariantPtr,1,uint16 flags;VariantPtr pVar;uint16 numDims;VoidPtr pBounds,array,0x660eda6e; var-args for bounds; delegates to internal redim helper 0x660ed604 with preserve=-1
+__vbaRedimVar2,110,cdecl,VariantPtr,1,uint16 flags;uint16 numDims;VariantPtr pVar;VoidPtr pUdtInfo;VoidPtr pBounds,array,0x660eda90; UDT-aware version with extra pUdtInfo param; delegates to 0x660ed604 with preserve=0
+__vbaRefVarAry,390,stdcall,SafeArrayPtr,0,VariantPtr pVar,array,Returns a pointer to the SAFEARRAY* inside a VARIANT. If VT_BYREF; returns *(pVar+8); otherwise returns &pVar->data. Validates VT_ARRAY. retn 0x4.
+__vbaUbound,445,stdcall,int32,0,SafeArrayPtr pArray;uint16 dimension,array,validates dim and returns lbound+cElements-1
+#
+# === FOREACH ===
+#
+__vbaExitEachAry,219,stdcall,void,0,SafeArrayPtr ppsa,foreach,0x6611197d; retn 0x4; calls SafeArrayUnlock and clears pointer
+__vbaExitEachColl,221,stdcall,void,0,VoidPtr ppEnum,foreach,0x6611199f; retn 0x4; Release()s the enumerator and clears pointer
+__vbaExitEachVar,222,stdcall,void,0,VoidPtr ppEnum;SafeArrayPtr ppsa;VoidPtr ppColl,foreach,0x6611195d; retn 0xc; dispatches to __vbaExitEachAry or __vbaExitEachColl based on ppsa
+__vbaForEachAry,238,stdcall,int32,0,IUnknownPtr pCollection;VariantPtr pVar;VoidPtr ppDisp,foreach,0x6610c6a8; retn 0xc; calls __vbaForEachCollVar internally; extracts IDispatch from VARIANT
+__vbaForEachCollAd,239,stdcall,int32,0,VoidPtr ppEnum;VoidPtr ppObj;IUnknownPtr pCollection,foreach,wraps ForEachCollVar; extracts IDispatch*
+__vbaForEachCollObj,240,stdcall,int32,0,uint32 vtType;VoidPtr ppObj;VoidPtr ppEnum;IUnknownPtr pCollection,foreach,calls ForEachCollAd; QI for target interface
+__vbaForEachCollVar,241,stdcall,int32,0,VoidPtr ppEnum;VariantPtr pVar;IUnknownPtr pCollection,foreach,obtains IEnumVARIANT via _NewEnum; calls Next
+__vbaForEachVar,242,stdcall,int32,0,IUnknownPtr pCollection;VariantPtr pVar;VoidPtr ppEnum,foreach,0x6610c6fa; retn 0xc; creates IEnumVARIANT; calls __vbaNextEachCollVar
+__vbaNextEachAry,342,stdcall,int32,0,uint16 vt;SafeArrayPtr ppsa;Int32Ptr pIndex;VariantPtr pVar,foreach,0x66111672; retn 0x10; iterates SAFEARRAY element by type; returns -1 if more or 0 if done
+__vbaNextEachCollAd,343,stdcall,int32,0,VoidPtr pEnum;VoidPtr ppObj,foreach,wraps NextEachCollVar; extracts IDispatch
+__vbaNextEachCollObj,344,stdcall,int32,0,uint32 vtType;VoidPtr pEnum;VoidPtr ppObj,foreach,wraps NextEachCollAd; QI result for target type
+__vbaNextEachCollVar,345,stdcall,int32,0,VoidPtr pEnum;VariantPtr pVar,foreach,calls IEnumVARIANT::Next(1); returns -1 if exhausted
+__vbaNextEachVar,346,stdcall,int32,0,uint16 vt;SafeArrayPtr ppsa;Int32Ptr pIndex;VoidPtr pEnum;VariantPtr pVar,foreach,0x66111915; retn 0x14; dispatcher: if array type calls __vbaNextEachAry; else __vbaNextEachCollVar
+#
+# === LATE BINDING ===
+#
+__vbaLateIdCall,282,cdecl,void,1,IDispatchPtr pObj;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,varargs are VARIANT*; IDispatch::Invoke DISPATCH_METHOD
+__vbaLateIdCallLd,283,cdecl,VariantPtr,1,VariantPtr pRetVar;IDispatchPtr pObj;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,like LateIdCall but captures return value
+__vbaLateIdCallSt,285,cdecl,void,1,IUnknownPtr pObj;int32 lateFlags;Bstr name;int32 argCount,late,0x6610c2f3; wraps __vbaLateIdCall with DISPATCH_METHOD flag; pushes 0 result then delegates to common late-bind dispatcher at 0x66106631
+__vbaLateIdSt,290,stdcall,void,0,IDispatchPtr pObj;VoidPtr pwszName;uint32 callFlags;uint32 argCount;VariantPtr pVal1;VariantPtr pVal2,late,property store via DISPATCH_PROPERTYPUT
+__vbaLateIdStAd,291,cdecl,void,1,IUnknownPtr pObj;IUnknownPtr pObjRef;int32 lateFlags;Bstr name;int32 argCount,late,0x6610c29d; late-bound property store by DispID with address result; flag 0x8 (DISPATCH_PROPERTYPUTREF)
+__vbaLateMemCall,292,cdecl,void,1,IUnknownPtr pObj;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,resolves IUnknown→IDispatch first
+__vbaLateMemCallLd,293,cdecl,VariantPtr,1,VariantPtr pRetVar;IUnknownPtr pObj;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,like LateMemCall but captures return value
+__vbaLateMemSt,323,stdcall,void,0,IUnknownPtr pObj;VoidPtr pwszName;uint32 callFlags;uint32 argCount;VariantPtr pVal1;VariantPtr pVal2,late,resolves IUnknown→IDispatch then property store
+__vbaLateMemStAd,324,cdecl,void,1,IUnknownPtr pObj;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,store-by-address variant; flag=0x8
+__vbaVarLateMemCallLd,112,cdecl,VariantPtr,1,VariantPtr pRetVar;VariantPtr pObjVar;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,object passed as VARIANT; flag=3
+__vbaVarLateMemCallLdRf,113,cdecl,VariantPtr,1,VariantPtr pRetVar;VariantPtr pObjVar;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,same as VarLateMemCallLd but flag=0x80000003 (ByRef)
+__vbaVarLateMemSt,115,stdcall,void,0,VariantPtr pObjVar;VoidPtr pwszName;uint32 callFlags;uint32 argCount;VariantPtr pVal1;VariantPtr pVal2,late,object as VARIANT; store via flag=4
+__vbaVarLateMemStAd,116,cdecl,void,1,VariantPtr pObjVar;VoidPtr pwszName;uint32 callFlags;uint32 argCount,late,store-by-address; flag=8; object as VARIANT
+#
+# === CURRENCY ===
+#
+__vbaCyAbs,185,stdcall,int64,0,int64 cyValue,currency,If high dword negative; neg low + not/sbb high; overflow check; retn 8
+__vbaCyAdd,188,stdcall,int64,0,int32 cyLo1;int32 cyHi1;int32 cyLo2;int32 cyHi2,currency,64-bit add via add/adc; overflow→error 6; returns EDX:EAX
+__vbaCyErrVar,189,stdcall,int64,0,VariantPtr pVar,currency,Like CyVar but with Error variant support; thunk -> shared dispatcher
+__vbaCyFix,191,stdcall,int64,0,int32 cyLo;int32 cyHi,currency,FPU truncate-toward-zero (chop rounding); returns EDX:EAX
+__vbaCyForInit,192,stdcall,int32,0,Int64Ptr pCounter;int32 startLo;int32 startHi;int32 limitLo;int32 limitHi;int32 stepLo;int32 stepHi,currency,Stores start into *pCounter; then calls ForNext check; retn 0x1C
+__vbaCyForNext,193,stdcall,int32,0,Int64Ptr pCounter;int32 limitLo;int32 limitHi;int32 stepLo;int32 stepHi,currency,Adds step via __vbaCyAdd; stores; then checks limit; retn 0x14
+__vbaCyI2,194,stdcall,int64,0,int16 value,currency,movsx; imul * 10000; returns in EDX:EAX; retn 4
+__vbaCyI4,196,stdcall,int64,0,int32 value,currency,imul value * 10000; returns in EDX:EAX; retn 4
+__vbaCyInt,197,stdcall,int64,0,int32 cyLo;int32 cyHi,currency,FPU floor (round toward -inf); returns EDX:EAX
+__vbaCyMul,198,stdcall,int64,0,int32 cyLo1;int32 cyHi1;int32 cyLo2;int32 cyHi2,currency,FPU fild/fmul/fdiv by 10000.0; returns EDX:EAX
+__vbaCyMulI2,200,stdcall,int64,0,int16 multiplier;int32 cyLo;int32 cyHi,currency,sign-extends I2→I4; delegates to VarCyMulI4
+__vbaCySgn,201,stdcall,int16,0,int64 cyValue,currency,Pushes 0:0 and cyValue; calls internal CY compare; retn 8
+__vbaCyStr,202,stdcall,int64,0,Bstr pStr,currency,Calls VarCyFromStr; returns CY in EDX:EAX; retn 4
+__vbaCySub,203,stdcall,int64,0,int32 cyLo1;int32 cyHi1;int32 cyLo2;int32 cyHi2,currency,64-bit sub via sub/sbb; overflow→error 6; returns EDX:EAX
+__vbaCyUI1,204,stdcall,int64,0,uint8 value,currency,movzx byte; imul 10000; returns in EDX:EAX; retn 4
+__vbaCyVar,205,stdcall,int64,0,VariantPtr pVar,currency,Dispatches via vtype jump table; returns CY in EDX:EAX; thunk -> shared dispatcher
+#
+# === ERROR HANDLING ===
+#
+__vbaEnd,212,cdecl,void,0,,error,terminates VB6 program; noreturn
+__vbaError,216,stdcall,void,0,uint16 errNum,error,0x660e6a99; retn 0x4; raises VB error by number; 0 or >0xFFFF maps to error 5 (invalid call)
+__vbaErrorOverflow,217,cdecl,void,0,,error,0x660e6ab2; pushes 6 (Overflow) and calls error handler; noreturn
+__vbaExceptHandler,218,cdecl,int32,0,VoidPtr pExcRec;VoidPtr pFrame;VoidPtr pCtx;VoidPtr pDispCtx,error,standard SEH handler; handles stack overflow specially
+__vbaExitProc,223,cdecl,void,0,,error,walks SEH chain via fs:[0]; clears TLS error state
+__vbaFailedFriend,228,cdecl,void,0,,error,0x660e592d; pushes error 0x61 (97 = Friend access violation) and calls error handler; noreturn
+__vbaGenerateBoundsError,246,cdecl,void,0,,error,0x660edaf4; pushes error 9 (Subscript out of range) and calls error handler; noreturn
+__vbaHresultCheck,256,stdcall,void,0,Hresult hr;IUnknownPtr pObj;GuidPtr piid;VoidPtr pVTable,error,0x660427c2; retn 0x10; checks TLS error state; converts specific HRESULTs (0x800A9C68->0x800A01B8); dispatches to error mapper
+__vbaHresultCheckNonvirt,257,stdcall,void,0,Hresult hr;IUnknownPtr pObj;GuidPtr piid;VoidPtr pVTable,error,export exists; similar to HresultCheck but for non-virtual calls
+__vbaHresultCheckObj,258,stdcall,void,0,int32 hr;VoidPtr pUnk;VoidPtr pGuid;VoidPtr pAdjust,error,checks HRESULT; raises error if failed
+__vbaOnError,352,stdcall,void,0,int32 nHandler,error,On Error handler; 0xFFFFFFFD=Resume Next
+__vbaResume,391,stdcall,void,0,int32 nResumeKind,error,Resume handler; -2=Resume -1=Resume Next >0=label
+__vbaSetSystemError,394,cdecl,void,0,,error,calls GetLastError(); stores in TLS+0x9C
+__vbaStopExe,395,stdcall,void,0,,error,Displays 'Stop statement encountered' message then raises error 0x9c68; never returns normally
+#
+# === FILE I/O ===
+#
+__vbaFileClose,229,stdcall,void,0,int16 nFileNum,file,if 0=no-op; otherwise delegates to internal close
+__vbaFileCloseAll,233,stdcall,void,0,int16 fileNum,file,0x660f3c8e; retn 0x4; shares implementation with __vbaFileLock/FileClose path; fileNum=0 closes all
+__vbaFileLock,234,stdcall,void,0,int32 nLockType;int32 nRecStart;int32 nRecEnd;int16 nFileNum,file,nLockType bits: 0x4=lock 0x2=unlock
+__vbaFileOpen,235,stdcall,void,0,int32 nMode;int16 nRecLen;int16 nFileNum;VoidPtr szFilename,file,nMode bitfield: 0-7=access 8-11=share 12-15=open mode
+__vbaFileSeek,236,stdcall,void,0,int32 recordNum;int16 fileNum,file,0x660f33b0; retn 0x8; validates file/record num; sets seek position in file channel structure
+__vbaGet3,247,stdcall,void,0,int16 nFileNum;int32 nRecNum;VoidPtr pBuffer,file,thin wrapper for Get# statement
+__vbaGet4,248,stdcall,void,0,int16 fileNum;int32 recordNum;VoidPtr pData;int32 dataLen,file,0x660f34fd; retn 0x10; file Get# with 4 params (includes length)
+__vbaGetFxStr3,249,stdcall,void,0,int16 fileNum;int32 recordNum;BstrPtr pStr,file,0x66056863; retn 0xc; Get# for fixed-length string; 3 params
+__vbaGetFxStr4,250,stdcall,void,0,int16 fileNum;int32 recordNum;BstrPtr pStr;int32 strLen,file,0x660f358d; retn 0x10; Get# for fixed-length string; 4 params
+__vbaGetOwner3,251,stdcall,void,0,int16 fileNum;int32 recordNum;VoidPtr pOwner,file,0x660567f5; retn 0xc; Get# with owner object; 3 params
+__vbaGetOwner4,252,stdcall,void,0,int16 fileNum;int32 recordNum;VoidPtr pOwner;int32 dataLen,file,0x660f3538; retn 0x10; Get# with owner object; 4 params
+__vbaInputFile,281,cdecl,void,1,VoidPtr pTypeDescArray;int16 fileNum,file,0x660eace1; var-args; reads typed values from file per type descriptor array
+__vbaPrintFile,355,cdecl,void,0,VoidPtr pVar;int16 nFileNum;int16 nPrintKind,file,validates file mode; calls internal print formatter
+__vbaPrintObj,356,stdcall,void,0,int16 fileNum,file,export exists at ordinal 255; likely alias for __vbaPrintFile at 0x6600b6ca
+__vbaPut3,357,stdcall,void,0,int16 fileNum;int32 recordNum;VoidPtr pData,file,0x66056727; retn 0xc; file Put# with 3 params
+__vbaPut4,358,stdcall,void,0,int16 fileNum;int32 recordNum;VoidPtr pData;int32 dataLen,file,0x660f351b; retn 0x10; file Put# with 4 params
+__vbaPutFxStr3,359,stdcall,void,0,int16 fileNum;int32 recordNum;BstrPtr pStr,file,0x660f3573; retn 0xc; Put# for fixed-length string; 3 params
+__vbaPutFxStr4,360,stdcall,void,0,int16 fileNum;int32 recordNum;BstrPtr pStr;int32 strLen,file,0x660f35a9; retn 0x10; Put# for fixed-length string; 4 params
+__vbaPutOwner3,361,stdcall,void,0,int16 nFileNum;int32 nRecNum;VoidPtr pBuffer,file,thin wrapper for Put# statement
+__vbaPutOwner4,362,stdcall,void,0,int16 fileNum;int32 recordNum;VoidPtr pData;VoidPtr pOwner,file,0x660f3556; retn 0x10; Put# with owner object; 4 params
+__vbaWriteFile,623,cdecl,void,0,int32 nFields;int16 fileNum;VoidPtr pFieldTypes;int32 nArgs,file,Write # statement: opens channel; writes fields with type-dispatched formatting; caller cleans stack
+rtcChangeDir,530,stdcall,void,0,Bstr path,file,retn 0x4; ChDir; calls SetCurrentDirectoryA
+rtcChangeDrive,533,stdcall,void,0,Bstr drive,file,retn 0x4; ChDrive; extracts drive letter A-Z; validates
+rtcDir,645,stdcall,Bstr,0,VariantPtr pathSpec;int16 attributes,file,retn 0x8; Dir$(); FindFirstFile/FindNextFile
+rtcFileAttributes,555,stdcall,int32,0,int16 fileNum;int16 mode,file,retn 0x8; FileAttr(); returns file mode (1=input; 2=output)
+rtcFileCopy,576,stdcall,void,0,Bstr source;Bstr destination,file,retn 0x8; FileCopy; reads/writes in blocks
+rtcFileDateTime,577,stdcall,void,0,VariantPtr result;Bstr pathName,file,retn 0x8; FileDateTime(); stat + FileTimeToSystemTime -> DATE variant
+rtcFileLen,578,stdcall,int32,0,Bstr pathName,file,retn 0x4; FileLen(); stat file; returns nFileSizeLow
+rtcFileLength,570,stdcall,int32,0,int16 fileNum,file,retn 0x4; LOF(); seek to end; get position; seek back
+rtcFreeFile,648,stdcall,int16,0,VariantPtr pvar,file,retn 0x4; finds free file number; returns file number as int16
+rtcGetFileAttr,579,stdcall,int32,0,Bstr pathname,file,retn 0x4; calls internal attr helper; masks out 0x80 (normal)
+rtcInputCharCount,620,stdcall,Bstr,0,int32 charCount;int32 fileNum,file,retn 0x8; reads charCount characters from file; returns BSTR (wide chars)
+rtcInputCharCountVar,621,stdcall,void,0,VariantPtr pResult;int32 charCount;int32 fileNum,file,retn 0xc; wraps rtcInputCharCount; returns VT_BSTR VARIANT
+rtcInputCount,566,stdcall,Bstr,0,int32 byteCount;int32 fileNum,file,retn 0x8; reads byteCount bytes from file; returns byte-string BSTR
+rtcInputCountVar,567,stdcall,void,0,VariantPtr pResult;int32 byteCount;int32 fileNum,file,retn 0xc; wraps rtcInputCount; returns VT_BSTR VARIANT
+rtcKillFiles,529,stdcall,void,0,VariantPtr filespec,file,retn 0x4; deletes files matching filespec pattern
+rtcMakeDir,531,stdcall,void,0,Bstr bstrPath,file,no frame ptr; thin wrapper pushing path+const to directory creation helper; retn 0x4
+rtcRemoveDir,532,stdcall,void,0,Bstr bstrPath,file,no frame ptr; thin wrapper; delegates to directory removal helper; retn 0x4
+rtcSetFileAttr,580,stdcall,void,0,Bstr bstrPath;int16 attr,file,push ebp; calls SetFileAttributesA; retn 0x8
+#
+# === EVENT SINK (COM) ===
+#
+__vbaRaiseEvent,379,stdcall,void,0,VoidPtr pEventObj;int32 eventOffset;VoidPtr pArgStack;int32 argCount,evtsink,0x660e90b6; retn 0x10; walks event sink chain; invokes IDispatch::Invoke on each connected sink
+EVENT_SINK2_AddRef,440,stdcall,uint32,0,VoidPtr pThis,evtsink,Resolves sink base via 0x6601756d; delegates to base vtable[1] (AddRef); retn 0x4
+EVENT_SINK2_Release,441,stdcall,uint32,0,VoidPtr pThis,evtsink,Resolves sink base via 0x6601756d; delegates to base vtable[2] (Release); retn 0x4
+EVENT_SINK_AddRef,401,stdcall,uint32,0,VoidPtr pthis,evtsink,COM IUnknown::AddRef; retn 4
+EVENT_SINK_Invoke,404,stdcall,Hresult,0,VoidPtr pthis;int32 dispIdMember;VoidPtr riid;uint32 lcid;uint16 wFlags;VoidPtr pDispParams;VariantPtr pVarResult;VoidPtr pExcepInfo;Int32Ptr puArgErr,evtsink,COM IDispatch::Invoke; retn 0x24
+EVENT_SINK_QueryInterface,400,stdcall,Hresult,0,VoidPtr pthis;VoidPtr riid;VoidPtr ppvObject,evtsink,COM IUnknown::QueryInterface; retn 0xC
+EVENT_SINK_Release,402,stdcall,uint32,0,VoidPtr pthis,evtsink,COM IUnknown::Release; retn 4
+#
+# === FDIV BUG WORKAROUNDS ===
+#
+_adj_fdiv_m16i,659,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdiv_m32,688,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdiv_m32i,701,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdiv_m64,718,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdiv_r,719,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdivr_m16i,720,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdivr_m32,721,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdivr_m32i,722,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fdivr_m64,723,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fpatan,724,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fprem,725,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fprem1,726,special,void,0,,fdiv,Pentium FDIV bug workaround
+_adj_fptan,727,special,void,0,,fdiv,Pentium FDIV bug workaround
+#
+# === CRT MATH INTRINSICS ===
+#
+_allmul,728,stdcall,int64,0,int32 lo1;int32 hi1;int32 lo2;int32 hi2,crt,CRT 64-bit multiply; result in edx:eax; retn 0x10
+_CIatan,156,cdecl,void,0,,crt,FPU intrinsic: pops st(0) to stack; calls atan helper; pushes result back to FPU
+_CIcos,157,cdecl,void,0,,crt,FPU intrinsic: pops st(0) to stack; calls cos helper; pushes result back to FPU
+_CIexp,158,special,void,0,,crt,x87: ST(0) = exp(ST(0))
+_CIlog,159,cdecl,void,0,,crt,FPU intrinsic: pops st(0) to stack; calls log helper; pushes result back to FPU
+_CIsin,160,cdecl,void,0,,crt,FPU intrinsic: pops st(0) to stack; calls sin helper; pushes result back to FPU
+_CIsqrt,161,cdecl,void,0,,crt,FPU intrinsic: pops st(0) to stack; calls sqrt helper; pushes result back to FPU
+_CItan,162,special,void,0,,crt,x87: ST(0) = tan(ST(0))
+#
+# === FPU CONVERSION INTRINSICS ===
+#
+__vbaFpCDblR4,118,cdecl,void,0,,fpu,0x661120d2; validates FPU st0 fits in double precision (store/reload via qword)
+__vbaFpCDblR8,119,cdecl,void,0,,fpu,export at ordinal 20; round-trip through qword to validate
+__vbaFpCmpCy,122,stdcall,int32,0,int32 cyLo;int32 cyHi,fpu,0x661120e9; retn 0x8; compares FPU st0 against CY value on stack; returns -1/0/1
+__vbaFpCSngR4,120,cdecl,void,0,,fpu,0x661120bb; validates FPU st0 fits in single precision (store/reload via dword)
+__vbaFpCSngR8,121,cdecl,void,0,,fpu,export at ordinal 22; likely same validation path as FpCDblR4
+__vbaFpCy,123,cdecl,int64,0,,fpu,0x6611206a; converts FPU st0 to scaled CY (multiply by 10000); returns EDX:EAX
+__vbaFPException,224,cdecl,void,0,,fpu,export at ordinal 124; 0x660f5daa is FPInt; FPException likely shares overflow check path at 0x66112026
+__vbaFPFix,225,cdecl,void,0,,fpu,export at ordinal 125; FPU st0 truncation toward zero (uses fldcw to set rounding mode)
+__vbaFpI2,124,cdecl,int16,0,,fpu,pops ST(0)→int16; frndint+fist; overflow check via fnstsw
+__vbaFpI4,125,cdecl,int32,0,,fpu,pops ST(0)→int32; frndint+fist; overflow check via fnstsw
+__vbaFPInt,226,cdecl,void,0,,fpu,0x660f5daa; operates on FPU st0; fwait; set truncation rounding mode; frndint; restore rounding mode
+__vbaFpR4,126,cdecl,float,0,,fpu,ST(0)→float; fld1+fmulp with single-precision FPCW
+__vbaFpR8,127,cdecl,double,0,,fpu,ST(0)→double; fld1+fmulp with double-precision FPCW
+__vbaFpUI1,128,cdecl,uint8,0,,fpu,0x66112045; rounds FPU st0 to integer; validates 0..255 range; returns in EAX
+#
+# === RUNTIME ENTRY / DLL EXPORTS ===
+#
+DllCanUnloadNow,154,cdecl,int32,0,,entry,Checks global refcount at 0x66119c78; returns S_FALSE(1) if nonzero; S_OK(0) if zero; bare retn
+DllFunctionCall,187,stdcall,VoidPtr,0,VoidPtr pDllCallInfo,entry,resolves Declare imports; returns function pointer
+DllGetClassObject,155,stdcall,int32,0,VoidPtr rclsid;VoidPtr riid;VoidPtr ppv,entry,Compares rclsid to internal CLSID; creates class factory; retn 0xc
+DLLGetDocumentation,153,stdcall,int32,0,VoidPtr hInstance;uint32 lcid;uint32 dwResId;uint32 dwStringType;VoidPtr ppBstr,entry,Loads string resource; converts to BSTR; retn 0x14
+DllRegisterServer,106,cdecl,int32,0,,entry,Gets module filename; loads type library; registers; bare retn
+DllUnregisterServer,107,cdecl,int32,0,,entry,Unregisters type library; bare retn
+MethCallEngine,199,special,void,0,VoidPtr param,entry,Custom CC: sub [esp+4];eax adjusts 'this' offset; tail-jumps to ProcCallEngine_Body
+ProcCallEngine,186,special,void,0,,entry,Custom CC: edx=RTMI ptr; return addr on stack; sets up P-Code frame; dispatches opcodes via jump table at 0x6610aa24
+ThunRTMain,100,stdcall,void,0,VoidPtr pVbHeader,entry,runtime initialization; noreturn
+UserDllMain,105,stdcall,int32,0,VoidPtr ppProject;VoidPtr pProjectData;VoidPtr hInstance;uint32 fdwReason;VoidPtr lpvReserved,entry,VB6 user DLL entry; handles DLL_PROCESS_ATTACH(1); DLL_PROCESS_DETACH(0); DLL_THREAD_ATTACH(2); retn 0x14
+VBDllGetClassObject,104,stdcall,int32,0,VoidPtr ppProject;VoidPtr pVBHeader;VoidPtr rclsid;VoidPtr riid;VoidPtr ppv;VoidPtr pUnkOuter;VoidPtr ppClassFactory,entry,User-project class factory creation; compares IIDs; creates basic_class object; retn 0x18
+VBDllUnRegisterServer,101,stdcall,int32,0,VoidPtr pVBHeader;VoidPtr rclsid,entry,Unregisters VB project classes; retn varies
+#
+# === MEMORY ACCESS (GetMem/PutMem/SetMem) ===
+#
+GetMem1,317,stdcall,int32,0,VoidPtr src;VoidPtr dst,mem,Reads 1 byte from *src into *dst; returns 0 (S_OK); retn 0x8
+GetMem2,300,stdcall,int32,0,VoidPtr src;Int16Ptr dst,mem,Reads 2 bytes (word) from *src into *dst; returns 0; retn 0x8
+GetMem4,301,stdcall,int32,0,VoidPtr src;Int32Ptr dst,mem,Reads 4 bytes (dword) from *src into *dst; returns 0; retn 0x8
+GetMem8,302,stdcall,int32,0,VoidPtr src;Int64Ptr dst,mem,Reads 8 bytes (qword) from *src into *dst; returns 0; retn 0x8
+GetMemEvent,319,stdcall,int32,0,VoidPtr pClassModule;VoidPtr pEventSink;VoidPtr src;VoidPtr dst,mem,Copies IUnknown* from event source with AddRef; 4 params; retn 0x10
+GetMemNewObj,314,stdcall,int32,0,VoidPtr pProject;VoidPtr pObjectInfo;VoidPtr pObjSlot;VoidPtr ppObj,mem,Auto-creates object if slot empty; then copies with AddRef; ebp-based; retn 0x10
+GetMemObj,305,stdcall,int32,0,VoidPtr src;VoidPtr dst,mem,Copies IUnknown* and calls AddRef; returns 0; retn 0x8
+GetMemStr,303,stdcall,int32,0,VoidPtr src;VoidPtr dst,mem,Copies BSTR via SysAllocStringByteLen; returns 0 or 0x8007000e (E_OUTOFMEMORY); retn 0x8
+GetMemVar,304,stdcall,int32,0,VoidPtr src;VoidPtr dst,mem,Copies VARIANT via VariantCopy; returns 0; retn 0x8
+PutMem1,318,stdcall,int32,0,VoidPtr dst;int32 val,mem,Writes low byte of val to *dst; returns 0; retn 0x8
+PutMem2,306,stdcall,int32,0,VoidPtr dst;int32 val,mem,Writes low word of val to *dst; returns 0; retn 0x8
+PutMem4,307,stdcall,int32,0,VoidPtr dst;int32 val,mem,Writes dword val to *dst; returns 0; retn 0x8
+PutMem8,308,stdcall,int32,0,VoidPtr dst;int32 lo;int32 hi,mem,Writes qword lo:hi to *dst; returns 0; retn 0xc
+PutMemEvent,320,stdcall,int32,0,VoidPtr pClassModule;VoidPtr pEventSink;VoidPtr dst;VoidPtr pObj,mem,Tail-calls PutMemObj with inner 2 params; retn 0x10
+PutMemNewObj,315,stdcall,int32,0,VoidPtr pProject;VoidPtr pObjectInfo;VoidPtr pObjSlot;VoidPtr pObj,mem,Auto-creates object if slot empty; then calls PutMemObj; ebp-based; retn 0x10
+PutMemObj,311,stdcall,int32,0,VoidPtr dst;VoidPtr pVariant,mem,Complex: extracts IDispatch from Variant; calls Invoke to assign; ebp-based; retn 0x8
+PutMemStr,309,stdcall,int32,0,VoidPtr dst;VoidPtr bstrSrc,mem,Allocates new BSTR copy; frees old; stores new; retn 0x8
+PutMemVar,310,stdcall,int32,0,VoidPtr dst;VoidPtr pVariant,mem,Copies VARIANT via VariantCopyInd; handles VT_DISPATCH extraction; ebp-based; retn 0x8
+SetMemEvent,321,stdcall,int32,0,VoidPtr pThis;uint16 eventIndex;VoidPtr pObj1;VoidPtr pObj2,mem,Complex event Set: resolves object; calls helper; ebp-based; retn 0x10
+SetMemNewObj,316,stdcall,int32,0,VoidPtr pProject;VoidPtr pObjectInfo;VoidPtr pObjSlot;VoidPtr pObj,mem,Tail-calls SetMemObj with inner 2 params; retn 0x10
+SetMemObj,313,stdcall,int32,0,VoidPtr dst;VoidPtr pObj,mem,AddRef new obj; swap into *dst; Release old; retn 0x8
+SetMemVar,312,stdcall,int32,0,VoidPtr dst;VoidPtr pVariant,mem,Validates VT_DISPATCH/VT_UNKNOWN; swaps object references; ebp-based; retn 0x8
+#
+# === INTERNAL / COM / ENGINE APIs ===
+#
+__vbaAptOffset,163,stdcall,int32,0,VoidPtr pObj,internal,Returns apartment thread offset; returns 0 if single-threaded; reads TLS for multi-apartment
+BASIC_CLASS_AddRef,411,stdcall,uint32,0,VoidPtr pThis,internal,Delegates to inner object at pThis+0x8 via vtable[1] (AddRef)
+BASIC_CLASS_GetIDsOfNames,413,stdcall,int32,0,VoidPtr pThis;VoidPtr riid;VoidPtr rgszNames;uint32 cNames;uint32 lcid;Int32Ptr rgDispId,internal,Compares riid to IID_NULL; resolves via EventSink_GetVtableBase; retn 0x18
+BASIC_CLASS_Invoke,414,stdcall,int32,0,VoidPtr pThis;int32 dispId;VoidPtr riid;uint32 lcid;uint16 wFlags;VoidPtr pDispParams;VoidPtr pVarResult;VoidPtr pExcepInfo;Int32Ptr puArgErr,internal,Full IDispatch::Invoke; validates riid=IID_NULL; calls IDispatchInvoke; fallback chains through pThis+0x18/+0x10; retn 0x24
+BASIC_CLASS_QueryInterface,410,stdcall,int32,0,VoidPtr pThis;VoidPtr riid;VoidPtr ppvObj,internal,Delegates to inner object at pThis+0x8 via vtable[0] (QI); retn 0xc
+BASIC_CLASS_Release,412,stdcall,uint32,0,VoidPtr pThis,internal,Delegates to inner object at pThis+0x8 via vtable[2] (Release)
+BASIC_DISPINTERFACE_GetTICount,420,stdcall,int32,0,VoidPtr pThis;Int32Ptr pctinfo,internal,Trivially stores 1 into *pctinfo and returns S_OK; retn 0x8
+BASIC_DISPINTERFACE_GetTypeInfo,421,stdcall,int32,0,VoidPtr pThis;uint32 iTInfo;uint32 lcid;VoidPtr ppTInfo,internal,Validates iTInfo==0; resolves via EventSink_GetVtableBase; retn 0x10
+CreateIExprSrvObj,2000,stdcall,VoidPtr,0,VoidPtr pProject;uint16 wType;uint16 wSubType,internal,Creates expression server COM object; allocates 0x18c bytes; returns IUnknown*; retn 0xc
+EbCreateContext,274,stdcall,int32,0,VoidPtr ppContext,internal,Allocates 0x1c-byte context; zeroes it; returns ptr via *ppContext; retn 0x4
+EbDestroyContext,275,stdcall,int32,0,VoidPtr pContext,internal,Destroys execution context; retn 0x4
+EbGetErrorInfo,284,stdcall,int32,0,VoidPtr ppErrorInfo,internal,Returns error information pointer; retn 0x4
+EbGetHandleOfExecutingProject,232,stdcall,int32,0,VoidPtr ppHandle,internal,Reads TLS -> execution context -> project handle; retn 0x4
+EbIsProjectOnStack,298,stdcall,int32,0,VoidPtr pProject,internal,Checks TLS for project presence on call stack; retn 0x4
+EbLibraryLoad,268,stdcall,int32,0,VoidPtr pCallback,internal,Stores callback ptr to global 0x66119380; retn 0x4
+EbLibraryUnload,269,stdcall,int32,0,VoidPtr pCallback,internal,Library unload callback registration; retn 0x4
+EbLoadRunTime,271,stdcall,int32,0,VoidPtr pTlsState;VoidPtr pProjectData,internal,Massive function: loads ObjectTable; sets up ExecProj; iterates objects; resolves vtables; ebp-based; retn 0x8
+EbResetProject,231,stdcall,int32,0,VoidPtr pProject,internal,Resets project state; retn 0x4
+EbResetProjectNormal,265,stdcall,int32,0,VoidPtr pProject,internal,Normal project reset; retn 0x4
+EbSetContextWorkerThread,276,stdcall,int32,0,VoidPtr pContext,internal,Sets worker thread context; retn 0x4
+TipCreateInstanceEx,299,stdcall,int32,0,VoidPtr pProject;VoidPtr rclsid;VoidPtr pUnkOuter;uint32 dwClsCtx;VoidPtr riid;VoidPtr ppv,internal,Extended CoCreateInstance wrapper for VB projects; retn varies
+TipGetAddressOfPredeclaredInstance,195,stdcall,int32,0,VoidPtr pProject;uint16 wObjectIndex;VoidPtr ppAddress,internal,Returns ptr to ObjectData+0x8 for predeclared instance; retn 0xc
+TipSetOption,220,stdcall,int32,0,VoidPtr pProject;uint32 dwOption;uint32 dwValue,internal,Sets project option; retn varies
+TipUnloadInstance,266,stdcall,int32,0,VoidPtr pInstance,internal,Unloads VB object instance; retn varies
+TipUnloadProject,227,stdcall,int32,0,VoidPtr pProject,internal,Checks project on stack; enters critsec; cleans up object table; releases ExecProj; retn 0x4
+Zombie_GetIDsOfNames,435,stdcall,int32,0,VoidPtr pThis;VoidPtr riid;VoidPtr rgszNames;uint32 cNames;uint32 lcid;Int32Ptr rgDispId,internal,Returns E_ZOMBIE (0x80010007) immediately; retn 0x18
+Zombie_GetTypeInfo,434,stdcall,int32,0,VoidPtr pThis;uint32 iTInfo;uint32 lcid;VoidPtr ppTInfo,internal,Returns E_ZOMBIE (0x80010007) immediately; retn 0x10
+Zombie_GetTypeInfoCount,433,stdcall,int32,0,VoidPtr pThis;Int32Ptr pctinfo,internal,Returns E_ZOMBIE (0x80010007) immediately; retn 0x8
+Zombie_Invoke,436,stdcall,int32,0,VoidPtr pThis;int32 dispId;VoidPtr riid;uint32 lcid;uint16 wFlags;VoidPtr pDispParams;VoidPtr pVarResult;VoidPtr pExcepInfo;Int32Ptr puArgErr,internal,Returns E_ZOMBIE (0x80010007) immediately; retn 0x24
+Zombie_QueryInterface,430,stdcall,int32,0,VoidPtr pThis;VoidPtr riid;VoidPtr ppvObj,internal,Delegates QI to inner obj at pThis+0x8; validates ppvObj non-null; retn 0xc
+#
+# === MISCELLANEOUS / RTC ===
+#
+__vbaChkstk,182,special,void,0,,misc,custom CC: EAX=alloc size; probes pages in 0x1000 increments
+__vbaCopyBytes,183,stdcall,VoidPtr,0,uint32 cbSize;VoidPtr pDst;VoidPtr pSrc,misc,memcpy-like: copies cbSize bytes from pSrc to pDst; returns pDst
+__vbaCopyBytesZero,184,stdcall,VoidPtr,0,uint32 cbSize;VoidPtr pDst;VoidPtr pSrc,misc,Copies cbSize bytes from pSrc to pDst; then zeros pSrc; returns pDst
+__vbaFixstrConstruct,237,stdcall,void,0,uint32 cchLen;BstrPtr ppBstr,misc,Allocates zero-filled fixed-length BSTR; stores in *ppBstr; error 0xe on OOM
+__vbaGosub,253,stdcall,int32,0,VoidPtr ppGosubStack,misc,Pushes gosub entry: allocates 8-byte node (next; retaddr); links to stack head; returns 0 (success); raises error 7 (OOM) on failure
+__vbaGosubFree,254,stdcall,void,0,VoidPtr ppGosubStack,misc,Frees entire gosub stack linked list; walks list freeing each node
+__vbaGosubReturn,255,stdcall,int32,0,VoidPtr ppGosubStack,misc,Pops gosub stack: restores return address from linked list node; frees node; returns 1 on success; raises error 3 if stack empty
+__vbaNameFile,339,stdcall,void,0,Bstr bstrOldName;Bstr bstrNewName,misc,VB 'Name' statement: converts BSTRs to ANSI; calls MoveFileA; raises VB file errors on failure
+__vbaOnGoCheck,353,stdcall,int16,0,int16 index,misc,Validates On...GoTo/GoSub index: clamps to [0; 255] range; raises error 5 if negative
+__vbaPowerR8,354,stdcall,double,0,double dBase;double dExponent,misc,double exponentiation; handles special cases
+__vbaR8ForNextCheck,373,stdcall,int32,0,double dCounter;double dStep;double dLimit,misc,For...Next boundary check for doubles; 0=continue -1=exit
+__vbaRecAnsiToUni,380,stdcall,VoidPtr,0,VoidPtr pRecInfo;VoidPtr pDst;VoidPtr pSrc,misc,Destroys pDst fields; then converts ANSI record fields to Unicode; returns pDst
+__vbaRecAssign,381,stdcall,VoidPtr,0,VoidPtr pRecInfo;VoidPtr pDst;VoidPtr pSrc,misc,Assigns UDT record: ecx=pRecInfo used by internal helper; returns pDst
+__vbaRecDestruct,382,stdcall,VoidPtr,0,VoidPtr pRecInfo;VoidPtr pRec,misc,Destroys UDT record fields via CleanupPropertyEntries with flags=0; returns pRec
+__vbaRecDestructAnsi,383,stdcall,void,0,VoidPtr pRecInfo;VoidPtr pRec,misc,Destroys UDT with ANSI conversion flag=2 via CleanupPropertyEntries
+__vbaRecUniToAnsi,384,stdcall,VoidPtr,0,VoidPtr pRecInfo;VoidPtr pDst;VoidPtr pSrc,misc,Destroys pDst fields (ANSI flag=2); then converts Unicode record to ANSI (direction=1); returns pDst
+rtcAnsiValueBstr,516,stdcall,int16,0,Bstr bstr,misc,retn 0x4; WideCharToMultiByte on first char; returns ANSI value in AX
+rtcAppActivate,597,stdcall,void,0,VariantPtr pTitle;VariantPtr pWait,misc,retn 0x8; VB AppActivate; finds window by title/PID; calls SetForegroundWindow
+rtcAppleScript,627,stdcall,void,0,VariantPtr pScript,misc,stub; always raises error 5 (not supported on Windows)
+rtcArray,601,stdcall,void,0,VariantPtr result;VariantPtr element,misc,retn 0x8; builds VT_ARRAY|VT_VARIANT (0x200c); copies 16-byte result
+rtcAtn,585,stdcall,double,0,double value,misc,VB6 Atn(); arctangent via fpatan
+rtcBeep,534,cdecl,void,0,,misc,bare retn; calls MessageBeep(0)
+rtcBstrFromAnsi,537,stdcall,Bstr,0,int32 ansiCode,misc,retn 0x4; MultiByteToWideChar; returns SysAllocStringLen result
+rtcBstrFromByte,694,stdcall,Bstr,0,uint8 byteVal,misc,retn 0x4; SysAllocStringByteLen with 1 byte
+rtcBstrFromChar,697,stdcall,Bstr,0,int32 charCode,misc,retn 0x4; range-checks 0x8000..0xFFFF; SysAllocStringLen 1 wchar
+rtcBstrFromFormatVar,650,stdcall,Bstr,0,VariantPtr var;VariantPtr format;int16 firstDayOfWeek;int16 firstWeekOfYear,misc,retn 0x10; Format$() implementation
+rtcByteValueBstr,693,stdcall,uint8,0,Bstr bstr,misc,retn 0x4; returns first byte of BSTR (ANSI byte value)
+rtcCallByName,715,stdcall,void,0,VariantPtr result;IDispatchPtr object;Bstr methodName;int32 callType;SafeArrayPtr args;int32 argCount,misc,retn 0x18; IDispatch::Invoke wrapper
+rtcCharValueBstr,696,stdcall,int16,0,Bstr bstr,misc,retn 0x4; returns first Unicode char value (AscW)
+rtcChoose,665,stdcall,void,0,VariantPtr result;float index;SafeArrayPtr choices,misc,retn 0xC; Choose() function; 1-based index into variant array
+rtcCommandBstr,669,cdecl,Bstr,0,,misc,bare retn; Command$(); returns SysAllocString of command line
+rtcCommandVar,670,stdcall,VariantPtr,0,VariantPtr presult,misc,VB6 Command$
+rtcCompareBstr,649,stdcall,void,0,VariantPtr result;Bstr str1;Bstr str2;int32 compare,misc,retn 0x10; wraps __vbaStrCompVar
+rtcCos,583,stdcall,double,0,double value,misc,retn 0x8; fcos instruction; returns via FPU ST(0)
+rtcCreateObject,625,stdcall,void,0,VariantPtr result;Bstr progId,misc,retn 0x8; CoCreateInstance wrapper; VT_DISPATCH result
+rtcCreateObject2,716,stdcall,void,0,VariantPtr result;Bstr progId;Bstr serverName,misc,retn 0xC; CreateObject with remote server; MkParseDisplayName/BindToObject
+rtcCurrentDir,647,stdcall,void,0,VariantPtr result;VariantPtr drive,misc,retn 0x8; CurDir variant version; returns VT_BSTR in VARIANT
+rtcCurrentDirBstr,646,stdcall,Bstr,0,VariantPtr drive,misc,retn 0x4; CurDir$ string version
+rtcCVErrFromVar,643,stdcall,void,0,VariantPtr result;VariantPtr errVar,misc,retn 0x8; converts error number to VT_ERROR variant (0x800A0000 | errnum)
+rtcDateAdd,661,stdcall,void,0,VariantPtr result;Bstr interval;double number;VariantPtr date;int16 firstDayOfWeek,misc,retn 0x14; DateAdd(); adds time interval to date
+rtcDateDiff,662,stdcall,void,0,VariantPtr result;Bstr interval;VariantPtr date1;VariantPtr date2;int16 firstDayOfWeek;int16 firstWeekOfYear,misc,retn 0x18; DateDiff(); computes interval difference
+rtcDateFromVar,641,stdcall,double,0,VariantPtr var,misc,retn 0x4; CDate(); wraps __vbaDateVar; returns DATE double via FPU
+rtcDatePart,663,stdcall,void,0,VariantPtr result;Bstr interval;VariantPtr date;int16 firstDayOfWeek;int16 firstWeekOfYear,misc,retn 0x14; DatePart(); extracts year/month/day/etc.
+rtcDDB,673,stdcall,double,0,double cost;double salvage;double life;double period;VariantPtr factor,misc,retn 0x24; double-declining-balance depreciation; returns via FPU
+rtcDeleteSetting,691,stdcall,void,0,Bstr appName;VariantPtr section;VariantPtr key,misc,retn 0x24; DeleteSetting; registry HKCU\Software\VB and VBA...; large stack frame with variant args
+rtcDoEvents,598,stdcall,int32,0,,misc,VB6 DoEvents; processes message queue
+rtcEndOfFile,571,stdcall,int16,0,int16 fileNum,misc,retn 0x4; EOF(); checks file position vs length
+rtcEnvironBstr,667,stdcall,Bstr,0,VariantPtr envString,misc,retn 0x4; Environ$(); GetEnvironmentVariableA
+rtcEnvironVar,666,stdcall,void,0,VariantPtr result;VariantPtr envString,misc,retn 0x8; Environ() variant wrapper; calls rtcEnvironBstr then wraps in VT_BSTR variant
+rtcErrObj,685,cdecl,IDispatchPtr,0,,misc,bare retn; returns TLS error object IDispatch ptr; AddRef before return
+rtcExp,586,stdcall,double,0,double value,misc,VB6 Exp(); calls _CIexp
+rtcFileLocation,569,stdcall,int32,0,int16 fileNum,misc,retn 0x4; Loc(); current file position / 128 for seq files
+rtcFileReset,554,cdecl,void,0,,misc,bare retn; Reset; flushes and closes all open files
+rtcFileSeek,568,stdcall,int32,0,int16 fileNum,misc,retn 0x4; Seek(); returns current byte position + 1
+rtcFileWidth,565,stdcall,void,0,int16 fileNum;int16 width,misc,retn 0x8; Width #; sets record width on file channel
+rtcFilter,708,stdcall,void,0,VariantPtr result;VariantPtr sourceArray;Bstr match;int16 include;int32 compare,misc,retn 0x14; Filter(); searches string array for matches
+rtcFV,678,stdcall,double,0,double rate;double nper;double pmt;VariantPtr pv;VariantPtr type,misc,retn 0x20; FV() financial function; future value calculation
+rtcGetAllSettings,692,stdcall,void,0,VariantPtr pResult;Bstr appName;Bstr section,misc,retn 0xc; reads registry HKCU; returns 2D VARIANT array via pResult
+rtcGetCurrentCalendar,700,cdecl,int32,0,,misc,retn; reads TLS thread state; returns calendar type from locale data
+rtcGetDateBstr,609,cdecl,Bstr,0,,misc,retn; calls GetLocalTime; formats date as MM-DD-YYYY BSTR
+rtcGetDateValue,540,stdcall,void,0,VariantPtr pResult;Bstr dateStr,misc,retn 0x8; calls VarDateFromStr; returns VT_DATE VARIANT
+rtcGetDateVar,610,stdcall,void,0,VariantPtr pResult,misc,retn 0x4; calls rtcGetPresentDate; returns date-only VARIANT
+rtcGetDayOfMonth,542,stdcall,void,0,VariantPtr pResult;VariantPtr pDate,misc,retn 0x8; extracts day field from decoded date; returns VT_I2 VARIANT
+rtcGetDayOfWeek,552,stdcall,void,0,VariantPtr pResult;VariantPtr pDate;int32 firstDayOfWeek,misc,retn 0xc; computes weekday with adjustable first-day; returns VT_I2 VARIANT
+rtcGetErl,605,cdecl,int32,0,,misc,retn; reads TLS+0x98 error line number from thread state
+rtcGetHostLCID,624,cdecl,int32,0,,misc,retn; reads global LCID from static [0x66114318]
+rtcGetHourOfDay,543,stdcall,void,0,VariantPtr pResult;VariantPtr pDate,misc,retn 0x8; extracts hour field; returns VT_I2 VARIANT
+rtcGetMinuteOfHour,544,stdcall,void,0,VariantPtr pResult;VariantPtr pDate,misc,retn 0x8; extracts minute field; returns VT_I2 VARIANT
+rtcGetMonthOfYear,545,stdcall,void,0,VariantPtr pResult;VariantPtr pDate,misc,retn 0x8; extracts month field; returns VT_I2 VARIANT
+rtcGetObject,626,stdcall,void,0,VariantPtr pResult;VariantPtr pathname;VariantPtr className,misc,retn 0xc; uses MkParseDisplayName/GetActiveObject/CoCreateInstance
+rtcGetPresentDate,546,stdcall,void,0,VariantPtr pResult,misc,retn 0x4; gets current date+time via GetLocalTime; returns VT_DATE VARIANT
+rtcGetSecondOfMinute,547,stdcall,void,0,VariantPtr pResult;VariantPtr pDate,misc,retn 0x8; extracts second field; returns VT_I2 VARIANT
+rtcGetSetting,689,stdcall,Bstr,0,Bstr appName;Bstr section;Bstr key;VariantPtr bytes),misc,retn 0x1c; registry read from HKCU; last param is inline VARIANT (7 dwords total)
+rtcGetTimeBstr,611,cdecl,Bstr,0,,misc,retn; formats current time as HH:MM:SS BSTR
+rtcGetTimer,535,cdecl,float,0,,misc,retn; returns seconds since midnight as Single via FPU (GetLocalTime)
+rtcGetTimeValue,541,stdcall,void,0,VariantPtr pResult;Bstr timeStr,misc,retn 0x8; calls VarDateFromStr with time flags; returns VT_DATE VARIANT
+rtcGetTimeVar,612,stdcall,void,0,VariantPtr pResult,misc,retn 0x4; computes seconds since midnight / 86400.0; returns VT_DATE VARIANT
+rtcGetYear,553,stdcall,void,0,VariantPtr pResult;VariantPtr pDate,misc,retn 0x8; extracts year field; returns VT_I2 VARIANT
+rtcIMEStatus,615,cdecl,int32,0,,misc,retn; checks locale flag; calls GetFocus+internal IME helper
+rtcImmediateIf,681,stdcall,void,0,VariantPtr pResult;VariantPtr condition;VariantPtr truePart;VariantPtr falsePart,misc,retn 0x10; IIf(); evaluates condition then copies truePart or falsePart
+rtcInputBox,596,stdcall,Hresult,0,VariantPtr pResult;VariantPtr prompt;VariantPtr title;VariantPtr xPos;VariantPtr yPos;VariantPtr helpFile;VariantPtr context,misc,retn 0x1c; displays input dialog; 7 params
+rtcIPMT,674,stdcall,double,0,double rate;double per;double nper;double pv;int32 due;VariantPtr fv,misc,retn 0x28; interest payment calculation; returns double via FPU
+rtcIRR,682,stdcall,double,0,SafeArrayPtr values;VariantPtr guess,misc,retn 0x8; internal rate of return via Newton-Raphson iteration; returns double via FPU
+rtcIsArray,556,stdcall,int16,0,VariantPtr pVar,misc,retn 0x4; checks VT_ARRAY bit (bit 13); returns VB boolean (-1/0)
+rtcIsDate,557,stdcall,int16,0,VariantPtr pVar,misc,retn 0x4; checks if variant can be parsed as date; complex type checking
+rtcIsEmpty,558,stdcall,int16,0,VariantPtr pVar,misc,retn 0x4; checks if VT == VT_EMPTY (0); returns VB boolean
+rtcIsError,559,stdcall,int16,0,VariantPtr pVar,misc,retn 0x4; checks if VT == VT_ERROR (0xa); returns VB boolean
+rtcIsMissing,592,stdcall,int16,0,VariantPtr pVar,misc,retn 0x4; checks for VT_ERROR with E_PARAMNOTFOUND (0x80020004)
+rtcIsNull,560,stdcall,int16,0,VariantPtr pVar,misc,retn 0x4; checks if VT == VT_NULL (1); returns VB boolean
+rtcIsNumeric,561,stdcall,int16,0,VariantPtr pvar,misc,VB6 IsNumeric(); returns VB bool
+rtcIsObject,562,stdcall,int16,0,VariantPtr pvar,misc,VB6 IsObject(); checks vt==9
+rtcLog,587,stdcall,double,0,double value,misc,VB6 Log(); natural log via fyl2x
+rtcMacId,590,stdcall,Bstr,0,Bstr bstr,misc,push ebp; WideCharToMultiByte conversion; retn 0x4
+rtcMIRR,683,stdcall,double,0,SafeArrayPtr ppsa;double financeRate;double reinvestRate,misc,push ebp; SafeArray 1D; FPU return st0; retn 0x14
+rtcMonthName,707,stdcall,Bstr,0,int32 month;int16 bAbbreviate,misc,push ebp; calendar-aware; calls GetDateFormatW; retn 0x8
+rtcMsgBox,595,stdcall,int32,0,VariantPtr prompt;int32 flags;VariantPtr title;VariantPtr helpfile;VariantPtr context,misc,VB6 MsgBox(); retn 0x14
+rtcNPer,679,stdcall,double,0,double rate;double pmt;double pv;VariantPtr pvarFv;VariantPtr pvarType,misc,push ebp; optional VARIANT params with 0x80020004 Missing check; retn 0x20
+rtcNPV,684,stdcall,double,0,double rate;SafeArrayPtr ppsa,misc,push ebp; net present value; SafeArray 1D; FPU return; retn 0xc
+rtcPackDate,538,stdcall,void,0,VariantPtr pvarResult;int16 year;int16 month;int16 day,misc,push ebp; packs SYSTEMTIME; retval via hidden ptr; retn 0x10
+rtcPackTime,539,stdcall,void,0,VariantPtr pvarResult;int16 hour;int16 minute;int16 second,misc,push ebp; packs SYSTEMTIME with fixed date 1899-12-30; retn 0x10
+rtcPartition,664,stdcall,void,0,VariantPtr pvarResult;VariantPtr pvarNumber;VariantPtr pvarStart;VariantPtr pvarStop;VariantPtr pvarInterval,misc,push ebp; string partition ranges; complex formatting; retn 0x14
+rtcPMT,676,stdcall,double,0,double rate;double nper;double pv;VariantPtr pvarFv;VariantPtr pvarType,misc,push ebp; FPU financial calc; optional VARIANT Missing checks; retn 0x20
+rtcPPMT,675,stdcall,double,0,double rate;double per;double nper;double pv;VariantPtr pvarFv;VariantPtr pvarType,misc,push ebp; calls rtcPMT+rtcIPMT; retn 0x28
+rtcPV,677,stdcall,double,0,double rate;double nper;double pmt;VariantPtr pvarFv;VariantPtr pvarType,misc,push ebp; present value; optional VARIANT Missing; retn 0x20
+rtcQBColor,589,stdcall,int32,0,int16 color,misc,no frame ptr; table lookup (16-entry QBColor table); retn 0x4
+rtcRandomize,594,stdcall,void,0,VariantPtr pvarSeed,misc,no frame ptr; optional VARIANT seed; calls Randomize helper; retn 0x4
+rtcRandomNext,593,stdcall,void,0,VariantPtr pvarSeed,misc,no frame ptr; optional VARIANT seed; calls Rnd helper with float; retn 0x4
+rtcRate,680,stdcall,double,0,double nper;double pmt;double pv;VariantPtr pvarFv;VariantPtr pvarType;VariantPtr pvarGuess,misc,push ebp; Newton-Raphson iteration (max 40); FPU return; retn 0x24
+rtcRgb,588,stdcall,int32,0,int16 red;int16 green;int16 blue,misc,no frame ptr; clamps 0-255; packs BGR into int32; retn 0xc
+rtcSaveSetting,690,stdcall,void,0,Bstr bstrAppName;Bstr bstrSection;Bstr bstrKey;Bstr bstrValue,misc,push ebp; registry write to HKCU; retn 0x10
+rtcSendKeys,599,stdcall,void,0,Bstr bstrKeys;VariantPtr pvarWait,misc,no frame ptr; optional wait; posts keystrokes; retn 0x8
+rtcSetCurrentCalendar,699,stdcall,void,0,int32 calendarType,misc,no frame ptr; validates 0-1; delegates to internal setter; retn 0x4
+rtcSetDateBstr,549,stdcall,void,0,Bstr bstrDate,misc,no frame ptr; thin wrapper; delegates to internal date setter; retn 0x4
+rtcSetDateVar,548,stdcall,void,0,VariantPtr pvarDate,misc,push ebp; converts variant to DATE; calls SetLocalTime; retn 0x4
+rtcSetTimeBstr,551,stdcall,void,0,Bstr bstrTime,misc,no frame ptr; thin wrapper; delegates to internal time setter; retn 0x4
+rtcSetTimeVar,550,stdcall,void,0,VariantPtr pvarTime,misc,push ebp; converts variant to DATE; calls SetLocalTime with fixed date; retn 0x4
+rtcShell,600,stdcall,double,0,VariantPtr pCommand;int16 nWindowStyle,misc,retn 0x8; VB Shell(); calls CreateProcessA/W; returns PID as double
+rtcSin,582,stdcall,double,0,double value,misc,push ebp; fabs range check then fsin; FPU return; retn 0x8
+rtcSLN,671,stdcall,double,0,double cost;double salvage;double life,misc,no frame ptr; (cost-salvage)/life; FPU return; retn 0x18
+rtcSqr,614,stdcall,double,0,double value,misc,retn 0x8; VB Sqr(); validates value >= 0; then FSQRT
+rtcSwitch,668,stdcall,VariantPtr,0,VariantPtr retval;SafeArrayPtr ppParamArray,misc,retn 0x8; VB Switch(); walks expr/value pairs in SafeArray
+rtcSYD,672,stdcall,double,0,double cost;double salvage;double life;double period,misc,push ebp; sum-of-years-digits depreciation; FPU return; retn 0x20
+rtcTan,584,stdcall,double,0,double value,misc,retn 0x8; VB Tan(); validates range; FPTAN + FDIVP
+rtcTypeName,591,stdcall,Bstr,0,VariantPtr pVar,misc,retn 0x4; VB TypeName(); inspects VT; IDispatch/IUnknown; returns type string
+rtcVarType,563,stdcall,int32,0,VariantPtr pVar,misc,retn 0x4; VB VarType(); returns VT code as zero-extended uint16
+rtcWeekdayName,706,stdcall,Bstr,0,int32 nWeekday;int16 bAbbreviate;int32 nFirstDayOfWeek,misc,retn 0xc; VB WeekdayName(); uses calendar-aware lookup

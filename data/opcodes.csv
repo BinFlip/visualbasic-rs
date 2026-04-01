@@ -1,0 +1,1558 @@
+# VB6 P-Code opcodes — encoding + verified runtime semantics
+# Merged from opcodes.csv (encoding) and opcode_semantics.csv (semantics)
+#
+# Encoding columns:
+#   table          - dispatch table (0=primary, 1-5=lead0-lead4)
+#   opcode         - hex opcode byte within the table
+#   size           - instruction size in bytes (excl. lead byte; -1=variable; 0=invalid)
+#   mnemonic       - opcode name
+#   operand_format - format specifiers (%a=frame, %s=pool, %l=branch, %c=import, etc.)
+#
+# Semantics columns (verified from MSVBVM60.DLL 6.00.9848 handler disassembly):
+#   pops      - evaluation stack slots consumed (4 bytes each; -1=variable)
+#   pushes    - evaluation stack slots produced
+#   fpu_pops  - x87 FPU stack values consumed
+#   fpu_push  - x87 FPU stack values produced
+#   mem_read  - bytes read from memory (0=none)
+#   mem_write - bytes written to memory (0=none)
+#   category  - semantic category (arith, compare, convert, load_frame, etc.)
+#   handler   - MSVBVM60.DLL handler address (reference only)
+#   notes     - human-readable description
+#
+table,opcode,size,mnemonic,operand_format,pops,pushes,fpu_pops,fpu_push,mem_read,mem_write,category,handler,notes
+0,0x00,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Debug marker — reads u8 line number operand; no stack effect
+0,0x01,1,InvalidExcode,,0,0,0,0,0,0,,,
+0,0x02,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Same handler as 0x00
+0,0x03,1,InvalidExcode,,0,0,0,0,0,0,,,
+0,0x04,3,FLdRfVar,%a,0,1,0,0,4,0,load_frame,0x66108E95,Push address of [EBP+sext(operand)] (LEA not LOAD); 4B pointer to 16B Variant
+0,0x05,3,ImpAdLdRf,%c,0,1,0,0,4,0,load_ind,0x66108EA3,Push *(const_pool_addr + sext(op)); indirect address load
+0,0x06,3,MemLdRfVar,%2,0,1,0,0,4,0,load_mem,0x66108EB3,Pop obj ptr; push addr of Variant at obj+offset (LEA)
+0,0x07,5,FMemLdRf,%a %2,0,1,0,0,4,0,load_mem,0x66108EC5,Push addr of member at [this+offset] (LEA not LOAD)
+0,0x08,3,FLdPr=,%a,0,1,0,0,4,0,load_frame,0x66108EC5,Load object ref from [EBP+sext(op)]; push 4B (COM interface ptr)
+0,0x09,5,ImpAdCallHresult,::call %c(%a),-1,0,0,0,0,0,call,0x6610A370,Import API call (DllFunctionCall); %x=import+argsize; HRESULT checked
+0,0x0A,5,ImpAdCallFPR4,%x,-1,0,0,1,0,0,call,0x6610E534,Import API call; result R4 on FPU ST0
+0,0x0B,5,ImpAdCallI2,%x,-1,1,0,0,0,0,call,0x6610A3C4,Import API call; result i16 (zext to i32) pushed on eval
+0,0x0C,5,ImpAdCallCy,%x,-1,2,0,0,0,0,call,0x6610E508,Import API call; result 8B Currency pushed as 2 eval slots
+0,0x0D,5,VCallHresult,%v,-1,0,0,0,0,0,call,0x6610A43B,COM vtable call; %v=offset+argsize; pops args+this; HRESULT checked; no push
+0,0x0E,3,VCallFPR8,%2,-1,0,0,1,0,0,call,0x6610E560,COM vtable call; pops args+this; result R8 on FPU ST0
+0,0x0F,3,VCallAd,%2,-1,1,0,0,0,0,call,0x6610E4EC,COM vtable call; pops args+this; result i32/ptr pushed on eval
+0,0x10,5,ThisVCallHresult,%2 %c,-1,0,0,0,0,0,call,0x6610A4A0,Like VCallHresult but uses 'this' from frame (not from eval stack)
+0,0x11,3,ThisVCall,%2,-1,1,0,0,0,0,call,0x6610A4C2,Like VCallAd but uses 'this' from frame; pushes return value
+0,0x12,3,ThisVCallAd,%2,-1,1,0,0,0,0,call,0x6610A4E4,Like VCallAd but uses 'this' from frame; pushes addr return value
+0,0x13,1,ExitProcHresult,%},0,0,0,0,0,0,return,0x6610A51D,Return from Function with HRESULT; cleanup + frame restore
+0,0x14,1,ExitProc,%},0,0,0,0,0,0,return,0x6610A529,Return from Sub (no return value); calls cleanup + frame restore
+0,0x15,1,ExitProcI2,,0,0,0,0,0,0,return,0x6610A535,Return from Function As Integer; return value in eval stack TOS
+0,0x16,1,ExitProcR4,,0,0,0,0,0,0,return,0x6610A541,Return from Function As Single; return value on x87 ST0
+0,0x17,1,ExitProcR8,,0,0,0,0,0,0,return,0x6610A54D,Return from Function As Double; return value on x87 ST0
+0,0x18,1,ExitProcCy,,0,0,0,0,0,0,return,0x6610A559,Return from Function As Currency; return value in EDX:EAX
+0,0x19,3,FStAdFunc,%a,1,0,0,0,0,4,store_frame,0x66108F00,Pop addr; store to function return value slot
+0,0x1A,3,FFree1Ad,%a,0,0,0,0,0,0,stack,0x66108F04,Free COM object at [EBP+sext(op)]; Release + set to NULL; no stack change
+0,0x1B,3,LitStr,%s,0,1,0,0,0,0,load_lit,0x66108EDA,Push constant pool pointer: *(const_pool + sext(operand)); resolved BSTR VA
+0,0x1C,3,BranchF,%l,1,0,0,0,0,0,branch,0x66108F5C,Pop TOS; if low i16==0 (False) take branch; else skip 2B target
+0,0x1D,3,BranchT,%l,1,0,0,0,0,0,branch,0x66108F76,Pop TOS; if low i16!=0 (True) take branch; else skip 2B target
+0,0x1E,3,Branch,%l,0,0,0,0,0,0,branch,0x66108F38,Unconditional branch; target = pcode_base + zx(u16 operand)
+0,0x1F,3,CRec2Ansi,%s,0,0,0,0,0,0,convert,0x6610E2C0,Convert UDT record fields from Unicode to ANSI in-place
+0,0x20,3,CRec2Uni,%s,0,0,0,0,0,0,convert,0x6610E2D0,Convert UDT record fields from ANSI to Unicode in-place
+0,0x21,1,FLdPrThis,,0,1,0,0,4,0,load_frame,0x66108F07,Push this pointer from frame slot [EBP-0x30]
+0,0x22,3,ImpAdLdPr,[%c],0,1,0,0,4,0,load_ind,0x661096CE,Load COM obj via *(const_pool+sext(op)); AddRef; push 4B
+0,0x23,3,FStStrNoPop,%a,0,0,0,0,0,4,store_frame,0x6610A098,Like FStStr but does NOT pop TOS; TOS BSTR stays on eval stack
+0,0x24,3,NewIfNullPr,%t,1,1,0,0,0,0,stack,0x6610A158,Pop obj ptr; if null create new instance; push (non-null) ptr
+0,0x25,1,PopAdLdVar,,1,1,0,0,16,0,stack,0x66108F32,Pop addr; load 16B Variant from *addr; push as 4 slots (16B)
+0,0x26,3,AryDescTemp,%a,0,1,0,0,0,0,stack,0x6610A168,Push addr of temp SafeArray descriptor from frame housekeeping
+0,0x27,3,LitVar_Missing,%a,0,4,0,0,0,0,load_lit,0x6610A174,Push 16B Variant with vbError/Missing type; 4 eval slots
+0,0x28,5,LitVarI2,%a %2,0,4,0,0,0,0,load_lit,0x6610A1A0,Read i16 from stream; push as 16B Variant(vbInteger); 4 eval slots
+0,0x29,-1,FFreeAd,,-1,0,0,0,0,0,stack,0x6610A0E8,Free N COM objects; var-length: u16 count + N×i16 frame offsets
+0,0x2A,1,ConcatStr,,2,1,0,0,0,0,arith,0x66108F1D,Pop 2 BSTR ptrs; concatenate via __vbaStrCat; push result BSTR ptr
+0,0x2B,3,PopTmpLdAd2,%a,0,1,0,0,0,0,stack,0x66108F22,Push addr of temp 2-byte slot in frame housekeeping
+0,0x2C,5,LateIdSt,%4,-1,0,0,0,0,0,call,0x6610E300,Late-bound property set via IDispatch::Invoke; pops value+args; DISPID from operand
+0,0x2D,3,AryUnlock,%a,1,0,0,0,0,0,stack,0x6610E2E0,Pop SafeArray ptr; SafeArrayUnlock; no push
+0,0x2E,3,AryLock,%a,1,0,0,0,0,0,stack,0x6610E2F0,Pop SafeArray ptr; SafeArrayLock; no push
+0,0x2F,3,FFree1Str,%a,0,0,0,0,0,0,stack,0x6610A0C8,Free BSTR at [EBP+sext(op)]; SysFreeString + set to NULL
+0,0x30,3,PopTmpLdAd8,%a,0,1,0,0,0,0,stack,0x66108F2A,Push addr of temp 8-byte slot in frame housekeeping
+0,0x31,3,FStStr,%a,1,0,0,0,0,4,store_frame,0x6610A05D,Pop BSTR ptr; swap with frame slot; SysFreeString old; ownership transfer
+0,0x32,-1,FFreeStr,,-1,0,0,0,0,0,stack,0x6610A0F8,Free N BSTRs; var-length: u16 count + N×i16 frame offsets
+0,0x33,3,LdFixedStr,%2,1,1,0,0,0,0,stack,0x6610A088,Pop dest addr; __vbaStrFixedLenAssign; push result BSTR ptr
+0,0x34,1,CStr2Ansi,,1,1,0,0,0,0,convert,0x6610A0B0,Pop BSTR; convert to ANSI string; push result ptr
+0,0x35,3,FFree1Var,%a,0,0,0,0,0,0,stack,0x6610A0D8,Clear Variant at [EBP+sext(op)]; __vbaVarClear; no stack change
+0,0x36,-1,FFreeVar,,-1,0,0,0,0,0,stack,0x6610A108,Clear N Variants; var-length: u16 count + N×i16 frame offsets
+0,0x37,1,PopFPR4,,0,1,1,0,0,0,stack,0x66108FA4,Pop x87 ST0 → store as f32 on eval stack; ESP-=4; fpu_pop=1 push=1
+0,0x38,3,CopyBytes,%2,-1,0,0,0,0,0,stack,0x6610A148,Variable-length memcpy; reads u16 size from operand stream
+0,0x39,1,PopFPR8,,0,2,1,0,0,0,stack,0x66108FB8,Pop x87 ST0 → store as f64 on eval stack (2 slots); ESP-=8; fpu_pop=1 push=2
+0,0x3A,5,LitVarStr,%a %s,0,4,0,0,0,0,load_lit,0x6610A1CC,Read %s const pool ref; push as 16B Variant(vbString); 4 eval slots
+0,0x3B,1,Ary1StStrCopy,,3,0,0,0,0,4,store_ind,0x6610D1A0,Pop BSTR + index + array; SysCopy BSTR to array[index]
+0,0x3C,1,GetLastError,,0,1,0,0,0,0,stack,0x6610A118,Push GetLastError() result as i32
+0,0x3D,3,CastAd,%c,1,1,0,0,0,0,convert,0x6610A128,Pop ptr; cast/validate COM interface; push validated ptr
+0,0x3E,3,FLdZeroAd,%a,0,1,0,0,0,0,load_lit,0x66108F97,Push i32 zero (0x00000000) onto eval stack
+0,0x3F,3,CVarCy,%a,2,4,0,0,0,0,convert,0x6610A1F0,Pop 2 Cy slots (8B); push as 16B Variant(vbCurrency); 4 slots
+0,0x40,1,Ary1LdRf,,2,1,0,0,4,0,load_ind,0x6610CF5C,Pop index+array; push address of array[index] (LEA not LOAD)
+0,0x41,1,Ary1LdPr,,2,1,0,0,4,0,load_ind,0x6610CF78,Pop index+array; push COM obj ref from array[index]; AddRef
+0,0x42,1,CR4Var,,4,0,0,1,0,0,convert,0x6610A940,Pop 16B Variant (4 slots); convert to R4; push FPU ST0
+0,0x43,3,FStStrCopy,%a,1,0,0,0,0,4,store_frame,0x6610A0A0,Pop BSTR; __vbaStrCopy to frame slot (copy semantics; orig freed)
+0,0x44,3,CVarI2,%a,1,4,0,0,0,0,convert,0x6610A1A0,Pop i32 (i16 val); push as 16B Variant(vbInteger); 4 slots
+0,0x45,1,Error,,1,0,0,0,0,0,stack,0x6610A140,Pop error number; raise VB runtime error via Err.Raise
+0,0x46,3,CVarStr,%a,1,4,0,0,0,0,convert,0x6610A1CC,Pop BSTR ptr; push as 16B Variant(vbString); 4 slots
+0,0x47,3,StFixedStr,%l %a,1,0,0,0,0,4,store_frame,0x6610A080,Pop BSTR; write to fixed-length string slot via __vbaStrFixedLenAssign
+0,0x48,3,ILdPr,%a,0,1,0,0,4,0,load_ind,0x661097B2,Load COM object ptr via double-deref; AddRef; push 4B
+0,0x49,1,PopAdLd4,,1,1,0,0,4,0,stack,0x66108F9B,Pop address; load i32 from that address; push value (deref)
+0,0x4A,1,FnLenStr,,1,1,0,0,0,0,stack,0x6610A110,Pop BSTR ptr; push SysStringLen result as i32
+0,0x4B,3,OnErrorGoto,%l,0,0,0,0,0,0,branch,0x66109F58,Set error handler target in frame; no stack effect
+0,0x4C,1,FnLBound,,1,1,0,0,0,0,stack,0x6610A130,Pop array SafeArray ptr; push LBound as i32
+0,0x4D,5,CVarRef,%a %2,0,4,0,0,0,0,convert,0x6610A218,Push 16B Variant ByRef pointing to [EBP+sext(op)]; 4 slots
+0,0x4E,3,FStVarCopyObj,%a,4,0,0,0,0,16,store_frame,0x6610A248,Pop 4 Variant slots; copy to frame slot with COM semantics
+0,0x4F,3,MidStr,%2,3,1,0,0,0,0,stack,0x6610A278,Pop str+start+len; Mid$(); push result BSTR ptr
+0,0x50,1,CI4Str,,1,1,0,0,0,0,convert,0x6610A988,Pop BSTR; convert to i32 via __vbaI4Str; push
+0,0x51,3,FLdZeroAd,%a,0,1,0,0,0,0,load_lit,0x66108F97,Push i32 zero (duplicate opcode; same handler as 0x3E)
+0,0x52,1,Ary1StVar,,6,0,0,0,0,16,store_ind,0x6610D168,Pop 4 Var slots + index + array; store 16B Variant to array[index]
+0,0x53,1,CBoolCy,,2,1,0,0,0,0,convert,0x6610A96A,Pop 2 Cy slots; convert to VB Bool (i16 -1/0); push as i32
+0,0x54,5,FMemStStrCopy,%a %2,1,0,0,0,0,4,store_mem,0x6610A0A0,Pop BSTR; __vbaStrCopy to [this+offset] (copy semantics)
+0,0x55,1,CI2Var,,4,1,0,0,0,0,convert,0x6610A95A,Pop 16B Variant (4 slots); convert to i16; push as i32
+0,0x56,3,NewIfNullAd,%c,1,1,0,0,0,0,stack,0x6610A160,Pop addr ptr; if null allocate; push (non-null) ptr
+0,0x57,5,LateMemLdVar,%a %2,-1,-1,0,0,0,0,call,0x6610E320,Late-bound member load via IDispatch; pops obj+args; pushes result (type varies)
+0,0x58,3,MemLdPr,%2,1,1,0,0,4,0,load_mem,0x661098F2,Pop obj ptr; load COM obj from member; AddRef; push 4B
+0,0x59,3,PopTmpLdAdStr,%a,0,1,0,0,0,0,stack,0x66108F2E,Push addr of temp BSTR slot in frame housekeeping
+0,0x5A,1,Erase,,-1,0,0,0,0,0,stack,0x6610A2E0,Erase array; reads frame offset; calls __vbaErase
+0,0x5B,3,FStAdFuncNoPop,%a,0,0,0,0,0,4,store_frame,0x6610A0D0,Copy TOS to return value slot without popping; duplicate of 0x19 NoPop variant
+0,0x5C,3,BranchFVar,%l,4,0,0,0,0,0,branch,0x6610A208,Pop 16B Variant (4 slots); test for False; branch if false
+0,0x5D,1,HardType,,1,1,0,0,0,0,convert,0x6610A2B0,Pop ptr; verify/cast COM type; push validated ptr
+0,0x5E,5,ImpAdCallI4,%x,-1,1,0,0,0,0,call,0x6610A3C4,Import API call (alias of 0x0B); result i32 pushed on eval
+0,0x5F,5,FMemLdPr,%a %2,0,1,0,0,4,0,load_mem,0x661099D0,Load COM obj from [this+offset]; AddRef; push 4B
+0,0x60,1,CStrVarTmp,,4,1,0,0,0,0,convert,0x6610A2C8,Pop 16B Variant (4 slots); convert to BSTR; push ptr
+0,0x61,7,LateIdLdVar,%a %4,-1,-1,0,0,0,0,call,0x6610E340,Late-bound identifier load via IDispatch; pops args; pushes result
+0,0x62,3,IStDarg,%a,1,0,0,0,0,4,store_ind,0x6610A298,Pop value; store to dispatch arg (DARG) slot
+0,0x63,3,LitVar_TRUE,%a,0,1,0,0,0,0,load_lit,0x6610A098,Push VB True (-1) as i32 onto eval stack
+0,0x64,5,NextI2,%a %l,0,0,0,0,2,2,branch,0x6610E380,For/Next i16: increment [EBP+op] by step; branch if not done
+0,0x65,5,NextStepI2,%a %l,1,0,0,0,2,2,branch,0x6610E3A0,For/Next i16 with Step: pop step; increment; branch if not done
+0,0x66,5,NextI4,%a %l,0,0,0,0,4,4,branch,0x6610E3C0,For/Next i32: increment [EBP+op] by 1; compare with limit; branch
+0,0x67,5,NextStepI4,%a %l,1,0,0,0,4,4,branch,0x6610E3E0,For/Next i32 with Step: pop step; increment; compare; branch
+0,0x68,5,NextStepR4,%a %l,0,0,1,0,4,4,branch,0x6610E400,For/Next R4 with FPU Step: increment via FPU; compare; branch
+0,0x69,5,NextStepR8,%a %l,0,0,1,0,8,8,branch,0x6610E410,For/Next R8 with FPU Step: increment via FPU; compare; branch
+0,0x6A,5,NextStepCy,%a %l,2,0,0,0,8,8,branch,0x6610E420,For/Next Cy: pop 2 step slots; increment; compare; branch
+0,0x6B,3,FLdI2,%a,0,1,0,0,2,0,load_frame,0x66109372,Read i16 from [EBP+sext(operand)]; zero-extend to i32; push 4B
+0,0x6C,3,ILdRf,%a,0,1,0,0,4,0,load_ind,0x66108EB3,Push address from double-deref: LEA of *[EBP+sext(op)] (ref to indirect var)
+0,0x6D,3,FLdR8,%a,0,2,0,0,8,0,load_frame,0x6610DEF5,Read 8B (R8/Double) from [EBP+sext(operand)]; push as 2x4B stack slots
+0,0x6E,3,FLdFPR4,%a,0,0,0,1,4,0,load_frame,0x661093BA,Load f32 from [EBP+sext(op)] onto x87 FPU stack (fld dword); NO eval stack change
+0,0x6F,3,FLdFPR8,%a,0,0,0,1,8,0,load_frame,0x661093CD,Load f64 from [EBP+sext(op)] onto x87 FPU stack (fld qword); NO eval stack change
+0,0x70,3,FStI2,%a,1,0,0,0,0,2,store_frame,0x6610940B,Pop i32 (use low 16); store i16 to [EBP+sext(operand)]
+0,0x71,3,FStR4,%a,1,0,0,0,0,4,store_frame,0x6610DF1A,Pop 1 slot (4B); store R4 to [EBP+sext(operand)]
+0,0x72,3,FStR8,%a,2,0,0,0,0,8,store_frame,0x6610DF31,Pop 2 slots (8B); store R8 to [EBP+sext(operand)]
+0,0x73,3,FStFPR4,%a,0,0,1,0,0,4,store_frame,0x6610940D,Pop x87 ST0; store f32 to [EBP+sext(op)] (fstp dword); NO eval stack change
+0,0x74,3,FStFPR8,%a,0,0,1,0,0,8,store_frame,0x66109420,Pop x87 ST0; store f64 to [EBP+sext(op)] (fstp qword); NO eval stack change
+0,0x75,3,ImpAdLdI2,%c,0,1,0,0,2,0,load_ind,0x661096D4,Load i16 via *(TOS_addr + sext(op)); pop addr push val; net: modify TOS
+0,0x76,3,ImpAdLdI4,%c,0,1,0,0,4,0,load_ind,0x661096F4,Load i32 via *(TOS_addr + sext(op)); pop addr push val; net: modify TOS
+0,0x77,3,ImpAdLdCy,%c,0,2,0,0,8,0,load_ind,0x66109714,Load 8B Cy via *(TOS_addr + sext(op)); pop addr push 2 slots
+0,0x78,3,ImpAdLdFPR4,%c,0,0,0,1,4,0,load_ind,0x6610973C,Load f32 via *(TOS_addr + sext(op)) → FPU; pop addr from eval
+0,0x79,3,ImpAdLdFPR8,%c,0,0,0,1,8,0,load_ind,0x66109754,Load f64 via *(TOS_addr + sext(op)) → FPU; pop addr from eval
+0,0x7A,3,ImpAdStI2,%c,1,0,0,0,0,2,store_ind,0x66109714,Pop val; store i16 via *(addr + sext(op)) where addr popped earlier
+0,0x7B,3,ImpAdStR4,%c,1,0,0,0,0,4,store_ind,0x66109730,Pop val; store R4 via *(addr + sext(op))
+0,0x7C,3,ImpAdStCy,%c,2,0,0,0,0,8,store_ind,0x6610974C,Pop 2 slots (8B Cy); store via *(addr + sext(op))
+0,0x7D,3,ImpAdStFPR4,%c,0,0,1,0,0,4,store_ind,0x6610976C,Pop FPU ST0; store f32 via *(addr + sext(op))
+0,0x7E,3,ImpAdStFPR8,%c,0,0,1,0,0,8,store_ind,0x66109784,Pop FPU ST0; store f64 via *(addr + sext(op))
+0,0x7F,3,ILdI2,%a,0,1,0,0,2,0,load_ind,0x66109774,Load i16 via double-deref: ptr=[EBP+sext(op)]; val=*(i16*)ptr; zext push 4B
+0,0x80,3,ILdI4,%a,0,1,0,0,4,0,load_ind,0x66109798,Load i32 via double-deref: ptr=[EBP+sext(op)]; val=*ptr; push 4B
+0,0x81,3,ILdR8,%a,0,2,0,0,8,0,load_ind,0x661097BC,Load R8 via double-deref: ptr=[EBP+sext(op)]; push 8B as 2 slots
+0,0x82,3,ILdFPR4,%a,0,0,0,1,4,0,load_ind,0x661097E6,Load f32 via double-deref: ptr=[EBP+sext(op)]; fld dword *ptr → FPU
+0,0x83,3,ILdFPR8,%a,0,0,0,1,8,0,load_ind,0x661097FA,Load f64 via double-deref: ptr=[EBP+sext(op)]; fld qword *ptr → FPU
+0,0x84,3,IStI2,%a,1,0,0,0,0,2,store_ind,0x661097F6,Pop i32(use low 16); store i16 via double-deref: ptr=[EBP+sext(op)]
+0,0x85,3,IStI4,%a,1,0,0,0,0,4,store_ind,0x66109814,Pop i32; store via double-deref: ptr=[EBP+sext(op)]; *ptr=val
+0,0x86,3,IStR8,%a,2,0,0,0,0,8,store_ind,0x66109830,Pop 2 slots (8B); store R8 via double-deref
+0,0x87,3,IStFPR4,%a,0,0,1,0,0,4,store_ind,0x66109856,Pop FPU ST0; store f32 via double-deref (fstp dword)
+0,0x88,3,IStFPR8,%a,0,0,1,0,0,8,store_ind,0x6610986C,Pop FPU ST0; store f64 via double-deref (fstp qword)
+0,0x89,3,MemLdI2,%2,1,1,0,0,2,0,load_mem,0x66109884,Pop obj ptr; read i16 at obj+offset; push i32 (zext)
+0,0x8A,3,MemLdStr,%2,1,1,0,0,4,0,load_mem,0x661098B2,Pop obj ptr; read BSTR ptr at obj+offset; push 4B
+0,0x8B,3,MemLdR8,%2,1,2,0,0,8,0,load_mem,0x661098DA,Pop obj ptr; read R8 at obj+offset; push 2 slots
+0,0x8C,3,MemLdFPR4,%2,1,0,0,1,4,0,load_mem,0x6610990A,Pop obj ptr; load f32 from obj+offset → FPU ST0
+0,0x8D,3,MemLdFPR8,%2,1,0,0,1,8,0,load_mem,0x66109924,Pop obj ptr; load f64 from obj+offset → FPU ST0
+0,0x8E,3,MemStI2,%2,2,0,0,0,0,2,store_mem,0x6610990E,Pop val + obj ptr; store i16 at obj+offset
+0,0x8F,3,MemStI4,%2,2,0,0,0,0,4,store_mem,0x66109928,Pop val + obj ptr; store i32 at obj+offset
+0,0x90,3,MemStR8,%2,3,0,0,0,0,8,store_mem,0x66109944,Pop 2 val + 1 obj ptr; store R8 at obj+offset
+0,0x91,3,MemStFPR4,%2,1,0,1,0,0,4,store_mem,0x6610996C,Pop obj ptr; pop FPU ST0; store f32 at obj+offset
+0,0x92,3,MemStFPR8,%2,1,0,1,0,0,8,store_mem,0x66109988,Pop obj ptr; pop FPU ST0; store f64 at obj+offset
+0,0x93,5,FMemLdI2,%a %2,0,1,0,0,2,0,load_mem,0x66109972,Load i16 from [this+offset]; this from frame; push i32 (zext)
+0,0x94,5,FMemLdR4,%a %2,0,1,0,0,4,0,load_mem,0x6610999C,Load R4 from [this+offset]; push 4B
+0,0x95,5,FMemLdCy,%a %2,0,2,0,0,8,0,load_mem,0x661099C0,Load 8B Cy from [this+offset]; push 2 slots
+0,0x96,5,FMemLdFPR4,%a %2,0,0,0,1,4,0,load_mem,0x661099E8,Load f32 from [this+offset] → FPU ST0 (fast member)
+0,0x97,5,FMemLdFPR8,%a %2,0,0,0,1,8,0,load_mem,0x661099FC,Load f64 from [this+offset] → FPU ST0 (fast member)
+0,0x98,5,FMemStI2,%a %2,1,0,0,0,0,2,store_mem,0x661099F0,Pop i32 (use low 16); store i16 to [this+offset]
+0,0x99,5,FMemStI4,%a %2,1,0,0,0,0,4,store_mem,0x66109A10,Pop i32; store to [this+offset]
+0,0x9A,5,FMemStR8,%a %2,2,0,0,0,0,8,store_mem,0x66109A30,Pop 2 val slots; store R8 to [this+offset]
+0,0x9B,5,FMemStFPR4,%a %2,0,0,1,0,0,4,store_mem,0x66109A4A,Pop FPU ST0; store f32 to [this+offset]
+0,0x9C,5,FMemStFPR8,%a %2,0,0,1,0,0,8,store_mem,0x66109A60,Pop FPU ST0; store f64 to [this+offset]
+0,0x9D,1,Ary1LdI2,,2,1,0,0,2,0,load_ind,0x6610CF8C,Pop index+array_desc; read i16 from array[index]; zext push
+0,0x9E,1,Ary1LdI4,,2,1,0,0,4,0,load_ind,0x6610CFB8,Pop index+array_desc; read i32 from array[index]; push value
+0,0x9F,1,Ary1LdCy,,2,2,0,0,8,0,load_ind,0x6610CFE8,Pop index+array_desc; read 8B Cy from array[index]; push 2 slots
+0,0xA0,1,Ary1LdFPR4,,2,0,0,1,4,0,load_ind,0x6610D018,Pop index+array_desc; read f32 from array[index]; push FPU
+0,0xA1,1,Ary1LdFPR8,,2,0,0,1,8,0,load_ind,0x6610D038,Pop index+array_desc; read f64 from array[index]; push FPU
+0,0xA2,1,Ary1StI2,,3,0,0,0,0,2,store_ind,0x6610D058,Pop val+index+array_desc; store i16 to array[index]
+0,0xA3,1,Ary1StI4,,3,0,0,0,0,4,store_ind,0x6610D088,Pop val+index+array_desc; store i32 to array[index]
+0,0xA4,1,Ary1StCy,,4,0,0,0,0,8,store_ind,0x6610D0B8,Pop 2_val+index+array_desc; store 8B Cy to array[index]
+0,0xA5,1,Ary1StFPR4,,2,0,1,0,0,4,store_ind,0x6610D0E8,Pop index+array_desc; pop FPU ST0; store f32 to array[index]
+0,0xA6,1,Ary1StFPR8,,2,0,1,0,0,8,store_ind,0x6610D108,Pop index+array_desc; pop FPU ST0; store f64 to array[index]
+0,0xA7,3,AryLdPr,%2,2,1,0,0,4,0,load_ind,0x6610D128,Pop index+array (multi-dim); push COM obj ref; AddRef
+0,0xA8,3,AryLdRf,%2,2,1,0,0,4,0,load_ind,0x6610D148,Pop index+array (multi-dim); push address (LEA)
+0,0xA9,1,AddI2,,2,1,0,0,0,0,arith,0x66109B08,Pop TOS i16; add to new TOS i16 in-place; overflow check; result sign-extended i32
+0,0xAA,1,AddI4,,2,1,0,0,0,0,arith,0x66109B3F,Pop TOS; add to new TOS in-place; overflow check (err 6)
+0,0xAB,1,AddR8,,0,0,1,0,0,0,arith,0x66109B55,FPU: faddp st1 st0; pops 2 fpu values pushes 1 result; NO eval stack change
+0,0xAC,1,AddCy,,4,2,0,0,0,0,arith,0x6610E424,Pop 2+2 slots (two 8B Cy); __vbaCyAdd; push 2 slots (8B result)
+0,0xAD,1,SubI2,,2,1,0,0,0,0,arith,0x66109B23,Pop TOS i16; sub from new TOS i16; overflow check; sign-extend result
+0,0xAE,1,SubI4,,2,1,0,0,0,0,arith,0x66109B7A,Pop TOS; subtract from new TOS in-place; overflow check (err 6)
+0,0xAF,1,SubR4,,0,0,1,0,0,0,arith,0x66109B98,FPU: fsubp st1 st0; pops 2 fpu pushes 1; R4 subtraction
+0,0xB0,1,SubCy,,4,2,0,0,0,0,arith,0x6610E440,Pop 2+2 slots (two 8B Cy); __vbaCySub; push 2 slots
+0,0xB1,1,MulI2,,2,1,0,0,0,0,arith,0x66109BA6,Pop TOS i16; mul with new TOS i16; overflow if result > 16-bit
+0,0xB2,1,MulI4,,2,1,0,0,0,0,arith,0x66109BC5,Pop TOS; multiply with new TOS; overflow check via imul
+0,0xB3,1,MulR8,,0,0,1,0,0,0,arith,0x66109B93,FPU: fmulp st1 st0; pops 2 fpu pushes 1; float multiplication
+0,0xB4,1,MulCy,,4,2,0,0,0,0,arith,0x6610E45C,Pop 2+2 slots (two 8B Cy); __vbaCyMul; push 2 slots
+0,0xB5,1,MulCyI2,,3,2,0,0,0,0,arith,0x6610E478,Pop 1 i16 + 2 Cy slots; multiply; push 2 Cy slots result
+0,0xB6,1,DivR8,,0,0,1,0,0,0,arith,0x66109B93,FPU: fdivp st1 st0; pops 2 fpu pushes 1; float division
+0,0xB7,1,UMiI2,,1,1,0,0,0,0,unary,0x66109BCC,Negate TOS i16 in-place; overflow check on -32768
+0,0xB8,1,UMiI4,,1,1,0,0,0,0,unary,0x66109BD9,Negate TOS in-place; overflow check on INT_MIN
+0,0xB9,1,UMiR8,,0,0,0,0,0,0,unary,0x66109BDA,FPU: fchs ST0; negate TOS on FPU in-place; no stack change
+0,0xBA,1,UMiCy,,2,2,0,0,0,0,unary,0x6610E4B4,Negate 2 eval slots (8B Cy) in-place via __vbaCyNeg
+0,0xBB,1,FnAbsI2,,1,1,0,0,0,0,unary,0x66109BE0,Abs of TOS i16 in-place; overflow on -32768
+0,0xBC,1,FnAbsI4,,1,1,0,0,0,0,unary,0x66109BE4,Abs of TOS i32 in-place; overflow on INT_MIN
+0,0xBD,1,FnAbsR4,,0,0,0,0,0,0,unary,0x66109BEA,FPU: fabs ST0; absolute value of FPU TOS in-place
+0,0xBE,1,FnAbsCy,,2,2,0,0,0,0,unary,0x6610E4D0,Absolute value of 2 eval slots (8B Cy) via __vbaCyAbs
+0,0xBF,1,IDvI2,,2,1,0,0,0,0,arith,0x66109C1A,Pop TOS (divisor); integer divide new TOS; overflow/div-zero check
+0,0xC0,1,IDvI4,,2,1,0,0,0,0,arith,0x66109C1A,Pop TOS (divisor); integer divide new TOS; calls __vbaI4DivI4
+0,0xC1,1,ModI2,,2,1,0,0,0,0,arith,0x66109C4D,Pop TOS (divisor); modulo new TOS; div-zero check
+0,0xC2,1,ModI4,,2,1,0,0,0,0,arith,0x66109C4D,Pop TOS (divisor); modulo new TOS; div-by-zero check
+0,0xC3,1,NotI4,,1,1,0,0,0,0,unary,0x66109BEC,Bitwise NOT of TOS in-place; no ESP change
+0,0xC4,1,AndI4,,2,1,0,0,0,0,arith,0x66109BFB,Pop TOS; AND with new TOS in-place; no overflow check
+0,0xC5,1,OrI4,,2,1,0,0,0,0,arith,0x66109C0B,Pop TOS; OR with new TOS in-place (same pattern as AndI4)
+0,0xC6,1,EqI2,,2,1,0,0,0,0,compare,0x6610A685,Same as EqI4 but compares i16 (low words); result -1/0 in i32
+0,0xC7,1,EqI4,,2,1,0,0,0,0,compare,0x6610A6A3,Pop TOS; compare with new TOS; result: 0=False -1=True
+0,0xC8,1,EqR4,,0,1,2,0,0,0,compare,0x6610A7D1,FPU: pop 2 FPR4; compare; push eval i32 bool -1/0
+0,0xC9,1,EqCy,,4,1,0,0,0,0,compare,0x6610A825,Pop 2+2 slots (two 8B Cy); compare; push 1 (i32 bool -1/0)
+0,0xCA,1,EqCyR8,,3,1,1,0,0,0,compare,0x6610A840,Pop 2 Cy slots + pop 1 FPU R8; compare; push eval i32 bool
+0,0xCB,1,NeI2,,2,1,0,0,0,0,compare,0x6610A6B3,Pop TOS i16; compare; result -1 if not equal
+0,0xCC,1,NeI4,,2,1,0,0,0,0,compare,0x6610A6C1,Pop TOS; compare with new TOS; result: -1 if not equal else 0
+0,0xCD,1,NeR8,,0,1,2,0,0,0,compare,0x6610A7D1,FPU: pop 2 FPR8; compare; push eval i32 bool -1/0
+0,0xCE,1,NeCy,,4,1,0,0,0,0,compare,0x6610A855,Pop 2+2 slots; compare; push 1
+0,0xCF,1,NeCyR8,,3,1,1,0,0,0,compare,0x6610A870,Pop 2 Cy + pop 1 FPU R8; compare; push eval i32 bool
+0,0xD0,1,LtI2,,2,1,0,0,0,0,compare,0x6610A6CF,Pop TOS i16; compare with new TOS i16; result -1/0 signed
+0,0xD1,1,LtI4,,2,1,0,0,0,0,compare,0x6610A6E1,Pop TOS; compare with new TOS; result: -1 if second<first else 0
+0,0xD2,1,LtR8,,0,1,2,0,0,0,compare,0x6610A813,FPU: pop 2; compare; push eval i32 bool
+0,0xD3,1,LtCy,,4,1,0,0,0,0,compare,0x6610A880,Pop 2+2 slots; compare; push 1
+0,0xD4,1,LtCyR8,,3,1,1,0,0,0,compare,0x6610A89B,Pop 2 Cy + pop 1 FPU R8; compare; push eval i32 bool
+0,0xD5,1,LeI2,,2,1,0,0,0,0,compare,0x6610A70B,Pop TOS i16; compare; result -1 if second<=first
+0,0xD6,1,LeI4,,2,1,0,0,0,0,compare,0x6610A71D,Pop TOS; compare with new TOS; result: -1 if second<=first else 0
+0,0xD7,1,LeR8,,0,1,2,0,0,0,compare,0x6610A813,FPU: pop 2; compare; push eval i32 bool
+0,0xD8,1,LeCy,,4,1,0,0,0,0,compare,0x6610A8B0,Pop 2+2 slots; compare; push 1
+0,0xD9,1,LeCyR8,,3,1,1,0,0,0,compare,0x6610A8CB,Pop 2 Cy + pop 1 FPU R8; compare; push eval i32 bool
+0,0xDA,1,GtI2,,2,1,0,0,0,0,compare,0x6610A747,Pop TOS i16; compare; result -1 if second>first
+0,0xDB,1,GtI4,,2,1,0,0,0,0,compare,0x6610A759,Pop TOS; compare with new TOS; result: -1 if second>first else 0
+0,0xDC,1,GtR4,,0,1,2,0,0,0,compare,0x6610A7F2,FPU: pop 2; compare; push eval i32 bool
+0,0xDD,1,GtCy,,4,1,0,0,0,0,compare,0x6610A8E0,Pop 2+2 slots; compare; push 1
+0,0xDE,1,GtCyR8,,3,1,1,0,0,0,compare,0x6610A8FB,Pop 2 Cy + pop 1 FPU R8; compare; push eval i32 bool
+0,0xDF,1,GeI2,,2,1,0,0,0,0,compare,0x6610A783,Pop TOS i16; compare; result -1 if second>=first
+0,0xE0,1,GeI4,,2,1,0,0,0,0,compare,0x6610A795,Pop TOS; compare with new TOS; result: -1 if second>=first else 0
+0,0xE1,1,GeR8,,0,1,2,0,0,0,compare,0x6610A813,FPU: pop 2; compare; push eval i32 bool
+0,0xE2,1,GeCy,,4,1,0,0,0,0,compare,0x6610A910,Pop 2+2 slots; compare; push 1
+0,0xE3,1,GeCyR8,,3,1,1,0,0,0,compare,0x6610A92B,Pop 2 Cy + pop 1 FPU R8; compare; push eval i32 bool
+0,0xE4,1,CI2I4,,1,1,0,0,0,0,convert,0x6610A9E3,Truncate TOS i32 to i16; overflow check if out of -32768..32767; store sign-extended
+0,0xE5,1,CI2R8,,0,0,1,0,0,0,convert,0x6610A9D7,Pop FPU R8; round to i16; push eval (via __vbaFpI2); overflow check
+0,0xE6,1,CI2Cy,,2,1,0,0,0,0,convert,0x6610A9EF,Pop 2 slots (8B Cy); divide by 10000; push 1 slot (i16 sext); calls __vbaCyI2
+0,0xE7,1,CI4UI1,,1,1,0,0,0,0,convert,0x6610A9EB,TOS i32 → mask to u8 (0-255); push i32; overflow check
+0,0xE8,1,CI4R8,,0,0,1,0,0,0,convert,0x6610A9F3,Pop FPU R8; round to i32; push eval (via __vbaFpI4); overflow check
+0,0xE9,1,CI4Cy,,2,1,0,0,0,0,convert,0x6610A9FD,Pop 2 slots (8B Cy); divide by 10000; push 1 slot (i32); calls __vbaCyI4
+0,0xEA,1,CR4R4,,0,0,0,0,0,0,convert,0x66108FE1,FPU: round ST0 to f32 precision (frndint-like); ST0 stays on FPU
+0,0xEB,1,CR8I2,,1,0,0,1,0,0,convert,0x66108FFB,Pop i32(zext i16) from eval; fild → push f64 on FPU; convert int→double
+0,0xEC,1,CR8I4,,1,0,0,1,0,0,convert,0x66109012,Pop i32 from eval; fild → push f64 on FPU; convert int→double
+0,0xED,1,CR8R8,,0,0,0,0,0,0,convert,0x66108FE1,FPU: no-op identity R8→R8; ST0 stays on FPU
+0,0xEE,1,CR8Cy,,2,0,0,1,0,0,convert,0x6610A95D,Pop 2 eval slots (8B Cy); convert to R8; push FPU ST0
+0,0xEF,1,CCyI2,,1,2,0,0,0,0,convert,0x6610A9A3,Pop 1 slot (i16 sext); multiply by 10000; push 2 slots (8B Cy)
+0,0xF0,1,CCyI4,,1,2,0,0,0,0,convert,0x6610A9BF,Pop 1 slot (i32); multiply by 10000; push 2 slots (8B Cy)
+0,0xF1,1,CCyR4,,0,2,1,0,0,0,convert,0x6610A9CF,Pop FPU R4; convert to Cy via __vbaCyR4; push 2 eval slots
+0,0xF2,1,CDateR8,,0,0,0,0,0,0,convert,0x66108FE1,FPU: identity R8→Date (same format); ST0 stays on FPU
+0,0xF3,3,LitI2,%2,0,1,0,0,0,0,load_lit,0x66109A01,Read i16 from stream; SIGN-extend to i32; push 4B
+0,0xF4,2,LitI2_Byte,%1,0,1,0,0,0,0,load_lit,0x66109A16,Read u8 from stream; sign-extend to i32; push 4B (compact LitI2)
+0,0xF5,5,LitI4,%4,0,1,0,0,0,0,load_lit,0x66109A26,Read i32 from stream; push 4B
+0,0xF6,9,LitCy,%4 %4,0,2,0,0,0,0,load_lit,0x66109A4C,Read i64 (8B) from stream; push as 2x4B stack slots (Currency)
+0,0xF7,5,LitCy4,%4,0,2,0,0,0,0,load_lit,0x66109A72,Read i32 from stream; sign-extend to i64; push 2 slots (Currency shorthand)
+0,0xF8,3,LitI2FP,%2,0,0,0,1,0,0,load_lit,0x66109ABB,Read i16 from stream; sign-extend; fild → push on FPU (compact float literal)
+0,0xF9,5,LitR4FP,%4,0,0,0,1,0,0,load_lit,0x66109AD2,Read f32 from stream; fld → push on FPU (compact R4 literal)
+0,0xFA,9,LitDate,%4 %4,0,2,0,0,0,0,load_lit,0x66109A92,Read f64 (8B) from stream; push as 2x4B stack slots (Date)
+0,0xFB,1,Lead0,,0,0,0,0,0,0,,,
+0,0xFC,1,Lead1,,0,0,0,0,0,0,,,
+0,0xFD,1,Lead2,,0,0,0,0,0,0,,,
+0,0xFE,1,Lead3,,0,0,0,0,0,0,,,
+0,0xFF,1,Lead4,,0,0,0,0,0,0,,,
+1,0x00,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x01,1,ImpUI1,,2,1,0,0,0,0,arith,0x6610EEA0,Logical IMP (NOT a OR b) on UI1; pop TOS; NOT+OR with second in-place
+1,0x02,1,ImpI4,,2,1,0,0,0,0,arith,0x6610EEB3,Logical IMP (NOT a OR b) on i32; pop TOS; NOT+OR with second in-place
+1,0x03,1,ImpI4,,2,1,0,0,0,0,arith,0x6610EEB3,Logical IMP i32 (duplicate slot; same handler as 0x02)
+1,0x04,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x05,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x06,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x07,3,ImpVar,%a,4,4,0,0,0,0,arith,0x6610EF8D,Variant Imp via __vbaVarImp; %a=2nd Variant; modify TOS 16B
+1,0x08,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x09,1,EqvUI1,,2,1,0,0,0,0,arith,0x6610EE7B,Logical EQV (NOT(a XOR b)) on UI1; pop TOS; modify second
+1,0x0A,1,EqvI4,,2,1,0,0,0,0,arith,0x6610EE8E,Logical EQV (NOT(a XOR b)) on i32; pop TOS; modify second
+1,0x0B,1,EqvI4,,2,1,0,0,0,0,arith,0x6610EE8E,Logical EQV i32 (duplicate slot; same handler as 0x0A)
+1,0x0C,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x0D,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x0E,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x0F,3,EqvVar,%a,4,4,0,0,0,0,arith,0x6610EF82,Variant Eqv via __vbaVarEqv; %a=2nd Variant; modify TOS 16B
+1,0x10,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x11,1,XorI4,,2,1,0,0,0,0,arith,0x6610EE6A,Bitwise XOR i32; pop TOS; XOR with second in-place
+1,0x12,1,XorI4,,2,1,0,0,0,0,arith,0x6610EE6A,Bitwise XOR i32 (duplicate slot; same handler as 0x11)
+1,0x13,1,XorI4,,2,1,0,0,0,0,arith,0x6610EE6A,Bitwise XOR i32 (duplicate slot)
+1,0x14,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x15,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x16,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x17,3,XorVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant Xor via __vbaVarXor; %a=2nd Variant; modify TOS 16B
+1,0x18,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x19,1,OrI2,,2,1,0,0,0,0,arith,0x66109C0B,Bitwise OR i16; same handler as primary OrI4 (truncated to i16 in caller)
+1,0x1A,1,OrI2,,2,1,0,0,0,0,arith,0x66109C0B,Bitwise OR i16 (duplicate slot)
+1,0x1B,1,OrI2,,2,1,0,0,0,0,arith,0x66109C0B,Bitwise OR i16 (duplicate slot)
+1,0x1C,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x1D,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x1E,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x1F,3,OrVar,%a,4,4,0,0,0,0,arith,0x66109CE4,Variant OR via __vbaVarOr; operand %a = 2nd Variant addr; modify TOS 16B
+1,0x20,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x21,1,AndUI1,,2,1,0,0,0,0,arith,0x66109BFB,Bitwise AND UI1; same handler as primary AndI4
+1,0x22,1,AndUI1,,2,1,0,0,0,0,arith,0x66109BFB,Bitwise AND UI1 (duplicate slot)
+1,0x23,1,AndUI1,,2,1,0,0,0,0,arith,0x66109BFB,Bitwise AND UI1 (duplicate slot)
+1,0x24,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x25,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x26,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x27,3,AndVar,%a,4,4,0,0,0,0,arith,0x66109CC6,Variant AND via __vbaVarAnd; operand %a = 2nd Variant addr; modify TOS 16B
+1,0x28,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x29,1,EqI2,,2,1,0,0,0,0,compare,0x6610A685,Lead0 EqI2: same as primary table EqI2; pop 1 compare with TOS push bool
+1,0x2A,1,EqI2,,2,1,0,0,0,0,compare,0x6610A685,Lead0 EqI2 (duplicate slot)
+1,0x2B,1,EqI4,,2,1,0,0,0,0,compare,0x6610A6A3,Lead0 EqI4: same as primary table EqI4; pop 1 compare push bool
+1,0x2C,1,EqR8,,0,1,2,0,0,0,compare,0x6610A7D1,Lead0 EqR8: FPU compare; pop 2 FPU push eval i32 bool
+1,0x2D,1,EqR8,,0,1,2,0,0,0,compare,0x6610A7D1,Lead0 EqR8 (duplicate slot)
+1,0x2E,1,EqCy,,4,1,0,0,0,0,compare,0x6610A825,Lead0 EqCy: Currency compare; pop 2×8B push i32 bool
+1,0x2F,3,EqVar,%a,4,4,0,0,0,0,compare,0x6610A85A,Variant equality via __vbaVarTstEq; %a=2nd Variant addr; TOS Variant → result Variant (vbBoolean)
+1,0x30,1,EqStr,,2,1,0,0,0,0,compare,0x6610A6C0,String equality via __vbaStrCmp(0=case-sensitive); pop 2 BSTRs push i32 bool
+1,0x31,3,EqTextVar,%a,4,4,0,0,0,0,compare,0x661103E7,Variant equality case-insensitive; %a=2nd Variant addr; TOS → result Variant
+1,0x32,1,EqTextStr,,2,1,0,0,0,0,compare,0x66110295,String equality case-insensitive via __vbaStrCmp(1); pop 2 BSTRs push i32 bool
+1,0x33,1,EqVarBool,,4,1,0,0,0,0,compare,0x6610A887,Variant equality (bool result); pop 4 Variant slots push i32 bool -1/0
+1,0x34,1,EqTextVarBool,,4,1,0,0,0,0,compare,0x6611042C,Variant equality case-insensitive (bool result); pop 4 push i32
+1,0x35,1,EqCyR8,,2,1,1,0,0,0,compare,0x6610A840,Lead0 EqCyR8: Mixed Cy/R8 compare; pop 2 Cy + 1 FPU push i32 bool
+1,0x36,1,NeUI1,,2,1,0,0,0,0,compare,0x6610A6B3,Ne UI1 compare; pop 1 compare TOS; result -1 if not equal
+1,0x37,1,NeUI1,,2,1,0,0,0,0,compare,0x6610A6B3,Ne UI1 (duplicate slot)
+1,0x38,1,NeI4,,2,1,0,0,0,0,compare,0x6610A6C1,Ne I4 compare; pop 1 compare TOS; result -1 if not equal
+1,0x39,1,NeR4,,0,1,2,0,0,0,compare,0x6610A7E2,FPU R4 Ne compare; pop 2 FPU push eval i32 bool
+1,0x3A,1,NeR4,,0,1,2,0,0,0,compare,0x6610A7E2,FPU R4 Ne (duplicate)
+1,0x3B,1,NeCy,,4,1,0,0,0,0,compare,0x6610A855,Currency Ne; pop 2×8B push i32 bool
+1,0x3C,3,NeVar,%a,4,4,0,0,0,0,compare,0x6610A825,Variant Ne via __vbaVarTstNe; TOS Variant → result Variant
+1,0x3D,1,NeStr,,2,1,0,0,0,0,compare,0x6610A715,String Ne case-sensitive; pop 2 BSTRs push i32 bool
+1,0x3E,3,NeTextVar,%a,4,4,0,0,0,0,compare,0x661103E0,Variant Ne case-insensitive; TOS Variant → result Variant
+1,0x3F,1,NeTextStr,,2,1,0,0,0,0,compare,0x661102B0,String Ne case-insensitive; pop 2 BSTRs push i32 bool
+1,0x40,1,NeVarBool,,4,1,0,0,0,0,compare,0x6610A86C,Variant Ne (bool result); pop 4 Var slots push i32 bool
+1,0x41,1,NeTextVarBool,,4,1,0,0,0,0,compare,0x66110425,Variant Ne case-insensitive (bool); pop 4 push i32
+1,0x42,1,NeCyR8,,2,1,1,0,0,0,compare,0x6610A870,Mixed Cy/R8 Ne; pop 2 Cy eval + 1 FPU push i32 bool
+1,0x43,1,LeUI1,,2,1,0,0,0,0,compare,0x6610A70B,Le UI1 compare; pop 1 compare TOS; result -1 if second<=first
+1,0x44,1,LeI2,,2,1,0,0,0,0,compare,0x6610A70B,Le I2 compare; pop 1 compare TOS
+1,0x45,1,LeI4,,2,1,0,0,0,0,compare,0x6610A71D,Le I4 compare; pop 1 compare TOS
+1,0x46,1,LeR4,,0,1,2,0,0,0,compare,0x6610A7F2,FPU R4 Le compare; pop 2 FPU push eval i32 bool
+1,0x47,1,LeR4,,0,1,2,0,0,0,compare,0x6610A7F2,FPU R4 Le (duplicate)
+1,0x48,1,LeCy,,4,1,0,0,0,0,compare,0x6610A8B0,Currency Le; pop 2×8B push i32 bool
+1,0x49,3,LeVar,%a,4,4,0,0,0,0,compare,0x6610A880,Variant Le via __vbaVarTstLe; TOS Variant → result Variant
+1,0x4A,1,LeStr,,2,1,0,0,0,0,compare,0x661102D8,String Le case-sensitive; pop 2 BSTRs push i32 bool
+1,0x4B,3,LeTextVar,%a,4,4,0,0,0,0,compare,0x661103EE,Variant Le case-insensitive
+1,0x4C,1,LeTextStr,,2,1,0,0,0,0,compare,0x66110305,String Le case-insensitive; pop 2 BSTRs push i32 bool
+1,0x4D,1,LeVarBool,,4,1,0,0,0,0,compare,0x6610A8A6,Variant Le (bool result); pop 4 push i32
+1,0x4E,1,LeTextVarBool,,4,1,0,0,0,0,compare,0x66110433,Variant Le case-insensitive (bool); pop 4 push i32
+1,0x4F,1,LeCyR8,,2,1,1,0,0,0,compare,0x6610A8CB,Mixed Cy/R8 Le; pop 2 Cy eval + 1 FPU push i32 bool
+1,0x50,1,GeUI1,,2,1,0,0,0,0,compare,0x6610A783,Ge UI1 compare; pop 1 compare TOS
+1,0x51,1,GeI2,,2,1,0,0,0,0,compare,0x6610A783,Ge I2 compare; pop 1 compare TOS
+1,0x52,1,GeI4,,2,1,0,0,0,0,compare,0x6610A795,Ge I4 compare; pop 1 compare TOS
+1,0x53,1,GeR4,,0,1,2,0,0,0,compare,0x6610A813,FPU R4 Ge compare; pop 2 FPU push eval i32 bool
+1,0x54,1,GeR4,,0,1,2,0,0,0,compare,0x6610A813,FPU R4 Ge (duplicate)
+1,0x55,1,GeCy,,4,1,0,0,0,0,compare,0x6610A910,Currency Ge; pop 2×8B push i32 bool
+1,0x56,3,GeVar,%a,4,4,0,0,0,0,compare,0x6610A8E0,Variant Ge via __vbaVarTstGe; TOS Variant → result Variant
+1,0x57,1,GeStr,,2,1,0,0,0,0,compare,0x66110319,String Ge case-sensitive; pop 2 BSTRs push i32 bool
+1,0x58,3,GeTextVar,%a,4,4,0,0,0,0,compare,0x661103F5,Variant Ge case-insensitive
+1,0x59,1,GeTextStr,,2,1,0,0,0,0,compare,0x66110332,String Ge case-insensitive; pop 2 BSTRs push i32 bool
+1,0x5A,1,GeVarBool,,4,1,0,0,0,0,compare,0x6610A906,Variant Ge (bool result); pop 4 push i32
+1,0x5B,1,GeTextVarBool,,4,1,0,0,0,0,compare,0x6611043A,Variant Ge case-insensitive (bool); pop 4 push i32
+1,0x5C,1,GeCyR8,,2,1,1,0,0,0,compare,0x6610A92B,Mixed Cy/R8 Ge; pop 2 Cy eval + 1 FPU push i32 bool
+1,0x5D,1,LtUI1,,2,1,0,0,0,0,compare,0x6610A6CF,Lt UI1 compare; pop 1 compare TOS
+1,0x5E,1,LtI2,,2,1,0,0,0,0,compare,0x6610A6CF,Lt I2 compare; pop 1 compare TOS
+1,0x5F,1,LtI4,,2,1,0,0,0,0,compare,0x6610A6E1,Lt I4 compare; pop 1 compare TOS
+1,0x60,1,LtR4,,0,1,2,0,0,0,compare,0x6610A802,FPU R4 Lt compare; pop 2 FPU push eval i32 bool
+1,0x61,1,LtR4,,0,1,2,0,0,0,compare,0x6610A802,FPU R4 Lt (duplicate)
+1,0x62,1,LtCy,,4,1,0,0,0,0,compare,0x6610A880,Currency Lt; pop 2×8B push i32 bool
+1,0x63,3,LtVar,%a,4,4,0,0,0,0,compare,0x6610A850,Variant Lt via __vbaVarTstLt; TOS Variant → result Variant
+1,0x64,1,LtStr,,2,1,0,0,0,0,compare,0x661102EC,String Lt case-sensitive via __vbaStrCmp; eax s<0 → True
+1,0x65,3,LtTextVar,%a,4,4,0,0,0,0,compare,0x661103E7,Variant Lt case-insensitive
+1,0x66,1,LtTextStr,,2,1,0,0,0,0,compare,0x66110300,String Lt case-insensitive
+1,0x67,1,LtVarBool,,4,1,0,0,0,0,compare,0x6610A876,Variant Lt (bool result); pop 4 push i32
+1,0x68,1,LtTextVarBool,,4,1,0,0,0,0,compare,0x6611042C,Variant Lt case-insensitive (bool); pop 4 push i32
+1,0x69,1,LtCyR8,,2,1,1,0,0,0,compare,0x6610A89B,Mixed Cy/R8 Lt; pop 2 Cy eval + 1 FPU push i32 bool
+1,0x6A,1,GtUI1,,2,1,0,0,0,0,compare,0x6610A747,Gt UI1 compare; pop 1 compare TOS
+1,0x6B,1,GtI2,,2,1,0,0,0,0,compare,0x6610A747,Gt I2 compare; pop 1 compare TOS
+1,0x6C,1,GtI4,,2,1,0,0,0,0,compare,0x6610A759,Gt I4 compare; pop 1 compare TOS
+1,0x6D,1,GtR4,,0,1,2,0,0,0,compare,0x6610A7F2,FPU R4 Gt compare; pop 2 FPU push eval i32 bool
+1,0x6E,1,GtR4,,0,1,2,0,0,0,compare,0x6610A7F2,FPU R4 Gt (duplicate)
+1,0x6F,1,GtCy,,4,1,0,0,0,0,compare,0x6610A8E0,Currency Gt; pop 2×8B push i32 bool
+1,0x70,3,GtVar,%a,4,4,0,0,0,0,compare,0x6610A8B0,Variant Gt via __vbaVarTstGt; TOS Variant → result Variant
+1,0x71,1,GtStr,,2,1,0,0,0,0,compare,0x6611030E,String Gt case-sensitive; pop 2 BSTRs push i32 bool
+1,0x72,3,GtTextVar,%a,4,4,0,0,0,0,compare,0x661103EE,Variant Gt case-insensitive
+1,0x73,1,GtTextStr,,2,1,0,0,0,0,compare,0x66110327,String Gt case-insensitive
+1,0x74,1,GtVarBool,,4,1,0,0,0,0,compare,0x6610A8D6,Variant Gt (bool result); pop 4 push i32
+1,0x75,1,GtTextVarBool,,4,1,0,0,0,0,compare,0x66110433,Variant Gt case-insensitive (bool); pop 4 push i32
+1,0x76,1,GtCyR8,,2,1,1,0,0,0,compare,0x6610A8FB,Mixed Cy/R8 Gt; pop 2 Cy eval + 1 FPU push i32 bool
+1,0x77,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x78,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x79,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x7A,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x7B,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x7C,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x7D,3,LikeVar,%a,4,4,0,0,0,0,compare,0x66110525,Variant Like pattern match via __vbaVarLike; TOS Variant → result Variant
+1,0x7E,1,LikeStr,,2,1,0,0,0,0,compare,0x66110504,String Like case-sensitive via __vbaStrLike(0); pop 2 BSTRs push i32 bool
+1,0x7F,3,LikeTextVar,%a,4,4,0,0,0,0,compare,0x66110508,Variant Like case-insensitive via __vbaVarLike; TOS → result
+1,0x80,1,LikeTextStr,,2,1,0,0,0,0,compare,0x661104F0,String Like case-insensitive via __vbaStrLike(1); pop 2 push i32
+1,0x81,1,LikeVarBool,,4,1,0,0,0,0,compare,0x6611053B,Variant Like (bool result); pop 4 Var slots push i32 bool
+1,0x82,1,LikeTextVarBool,,4,1,0,0,0,0,compare,0x66110529,Variant Like case-insensitive (bool); pop 4 push i32
+1,0x83,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x84,1,BetweenUI1,,3,1,0,0,0,0,compare,0x6610F0B0,Between UI1; pop val+low+high; push i32 bool
+1,0x85,1,BetweenI2,,3,1,0,0,0,0,compare,0x6610F0C0,Between I2; pop val+low+high; push i32 bool
+1,0x86,1,BetweenI4,,3,1,0,0,0,0,compare,0x6610F0D0,Between I4; pop val+low+high; push i32 bool
+1,0x87,1,BetweenR4,,0,1,3,0,0,0,compare,0x6610F0E0,FPU Between R4; pop 3 FPU vals; push eval i32 bool
+1,0x88,1,BetweenR4,,0,1,3,0,0,0,compare,0x6610F0E0,FPU Between R4 (duplicate)
+1,0x89,1,BetweenCy,,6,1,0,0,0,0,compare,0x6610F0F0,Currency Between; pop 3×8B; push i32 bool
+1,0x8A,1,BetweenVar,,12,1,0,0,0,0,compare,0x6610F100,Variant Between; pop 3×16B; push i32 bool
+1,0x8B,1,BetweenStr,,3,1,0,0,0,0,compare,0x6610F110,String Between; pop 3 BSTRs; push i32 bool
+1,0x8C,1,BetweenTextVar,,12,1,0,0,0,0,compare,0x6610F120,Variant Between case-insensitive; pop 3×16B; push i32
+1,0x8D,1,BetweenTextStr,,3,1,0,0,0,0,compare,0x6610F130,String Between case-insensitive; pop 3 BSTRs; push i32
+1,0x8E,1,AddUI1,,2,1,0,0,0,0,arith,0x6610EC0C,UI1 unsigned add; pop TOS byte; add to second; unsigned overflow check (err 6)
+1,0x8F,1,AddI2,,2,1,0,0,0,0,arith,0x66109B08,Lead0 AddI2: shares primary table handler; i16 add with overflow
+1,0x90,1,AddI4,,2,1,0,0,0,0,arith,0x66109B3F,Lead0 AddI4: shares primary table handler; i32 add with overflow
+1,0x91,1,AddR4,,0,0,1,0,0,0,arith,0x66109B55,Lead0 AddR4: shares primary table FPU handler; faddp
+1,0x92,1,AddR4,,0,0,1,0,0,0,arith,0x66109B55,Lead0 AddR4 (duplicate)
+1,0x93,1,AddCy,,4,2,0,0,0,0,arith,0x6610E424,Lead0 AddCy: shares primary table handler; __vbaCyAdd
+1,0x94,3,AddVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant Add via __vbaVarAdd; %a=2nd Variant addr; modify TOS 16B
+1,0x95,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x96,1,SubUI1,,2,1,0,0,0,0,arith,0x6610EC2D,UI1 unsigned sub; pop TOS byte; sub from second; unsigned overflow
+1,0x97,1,SubI2,,2,1,0,0,0,0,arith,0x66109B23,Lead0 SubI2: shares primary table handler
+1,0x98,1,SubI4,,2,1,0,0,0,0,arith,0x66109B7A,Lead0 SubI4: shares primary table handler
+1,0x99,1,SubR4,,0,0,1,0,0,0,arith,0x66109B98,Lead0 SubR4: FPU fsubp
+1,0x9A,1,SubR4,,0,0,1,0,0,0,arith,0x66109B98,Lead0 SubR4 (duplicate)
+1,0x9B,1,SubCy,,4,2,0,0,0,0,arith,0x6610E440,Lead0 SubCy: __vbaCySub
+1,0x9C,3,SubVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant Sub via __vbaVarSub; %a=2nd Variant
+1,0x9D,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0x9E,1,ModUI1,,2,1,0,0,0,0,arith,0x6610EC9E,UI1 unsigned mod
+1,0x9F,1,ModI2,,2,1,0,0,0,0,arith,0x66109C4D,Lead0 ModI2: shares primary handler
+1,0xA0,1,ModI4,,2,1,0,0,0,0,arith,0x66109C4D,Lead0 ModI4: shares primary handler
+1,0xA1,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xA2,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xA3,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xA4,3,ModVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant Mod via __vbaVarMod; %a=2nd Variant
+1,0xA5,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xA6,1,IDvUI1,,2,1,0,0,0,0,arith,0x6610EC82,UI1 integer division
+1,0xA7,1,IDvI2,,2,1,0,0,0,0,arith,0x66109C1A,Lead0 IDvI2: shares primary handler
+1,0xA8,1,IDvI4,,2,1,0,0,0,0,arith,0x66109C1A,Lead0 IDvI4: shares primary handler
+1,0xA9,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xAA,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xAB,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xAC,3,IDvVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant IDv via __vbaVarIDv; %a=2nd Variant
+1,0xAD,1,Unknown,,0,0,0,0,0,0,,,
+1,0xAE,1,MulUI1,,2,1,0,0,0,0,arith,0x6610EC4E,UI1 unsigned mul; unsigned overflow check
+1,0xAF,1,MulI2,,2,1,0,0,0,0,arith,0x66109BA6,Lead0 MulI2: shares primary handler
+1,0xB0,1,MulI4,,2,1,0,0,0,0,arith,0x66109BC5,Lead0 MulI4: shares primary handler
+1,0xB1,1,MulR4,,0,0,1,0,0,0,arith,0x66109B93,Lead0 MulR4: FPU fmulp
+1,0xB2,1,MulR4,,0,0,1,0,0,0,arith,0x66109B93,Lead0 MulR4 (duplicate)
+1,0xB3,1,MulCy,,4,2,0,0,0,0,arith,0x6610E45C,Lead0 MulCy: __vbaCyMul
+1,0xB4,3,MulVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant Mul via __vbaVarMul; %a=2nd Variant
+1,0xB5,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xB6,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xB7,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xB8,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xB9,1,DivR8,,0,0,1,0,0,0,arith,0x66109B93,Lead0 DivR8: FPU fdivp
+1,0xBA,1,DivR8,,0,0,1,0,0,0,arith,0x66109B93,Lead0 DivR8 (duplicate)
+1,0xBB,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xBC,3,DivVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant Div via __vbaVarDiv; %a=2nd Variant
+1,0xBD,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xBE,1,NotUI1,,1,1,0,0,0,0,unary,0x6610EECE,UI1 bitwise NOT; modify TOS low byte in-place
+1,0xBF,1,NotI4,,1,1,0,0,0,0,unary,0x66109BEC,Lead0 NotI4: shares primary handler
+1,0xC0,1,NotI4,,1,1,0,0,0,0,unary,0x66109BEC,Lead0 NotI4 (duplicate)
+1,0xC1,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xC2,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xC3,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xC4,3,NotVar,%a,4,4,0,0,0,0,unary,0x66109CBE,Variant Not via __vbaVarNot; %a=Variant addr; modify in-place
+1,0xC5,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xC6,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xC7,1,UMiI2,,1,1,0,0,0,0,unary,0x66109BCC,Lead0 UMiI2: shares primary handler; negate i16 in TOS
+1,0xC8,1,UMiI2,,1,1,0,0,0,0,unary,0x66109BCC,Lead0 UMiI2 (duplicate)
+1,0xC9,1,UMiR4,,0,0,0,0,0,0,unary,0x66109BDA,Lead0 UMiR4: FPU fchs ST0
+1,0xCA,1,UMiR4,,0,0,0,0,0,0,unary,0x66109BDA,Lead0 UMiR4 (duplicate)
+1,0xCB,1,UMiCy,,2,2,0,0,0,0,unary,0x6610E4B4,Lead0 UMiCy: __vbaCyNeg
+1,0xCC,3,UMiVar,%a,4,4,0,0,0,0,unary,0x66109CBE,Variant UMi via __vbaVarNeg; modify in-place
+1,0xCD,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xCE,3,PwrVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant Power via __vbaVarPwr; %a=2nd Variant
+1,0xCF,1,PwrR8R8,,0,0,1,0,0,0,arith,0x6610EF18,FPU R8 power; calls __vbaPowerR8; pops 2 FPU pushes 1
+1,0xD0,1,PwrR8I2,,1,0,0,0,0,0,arith,0x6610EF24,R8^I2 power; pop i32 from eval + FPU R8; result on FPU
+1,0xD1,1,MulCyI2,,3,2,0,0,0,0,arith,0x6610E478,Lead0 MulCyI2: shares primary handler; pop i16+2Cy push 2Cy
+1,0xD2,1,ObjIs,,2,1,0,0,0,0,compare,0x6610EF56,COM Is operator; pop 2 obj ptrs; compare identity; push i32 bool
+1,0xD3,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xD4,1,FnAbsI2,,1,1,0,0,0,0,unary,0x66109BE0,Lead0 FnAbsI2: shares primary handler
+1,0xD5,1,FnAbsI4,,1,1,0,0,0,0,unary,0x66109BE4,Lead0 FnAbsI4: shares primary handler
+1,0xD6,1,FnAbsR4,,0,0,0,0,0,0,unary,0x66109BEA,Lead0 FnAbsR4: FPU fabs ST0
+1,0xD7,1,FnAbsR4,,0,0,0,0,0,0,unary,0x66109BEA,Lead0 FnAbsR4 (duplicate)
+1,0xD8,1,FnAbsCy,,2,2,0,0,0,0,unary,0x6610E4D0,Lead0 FnAbsCy: __vbaCyAbs
+1,0xD9,3,FnAbsVar,%a,4,4,0,0,0,0,unary,0x66109CBE,Variant Abs via __vbaVarAbs; modify in-place
+1,0xDA,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xDB,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xDC,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xDD,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xDE,1,FnFixR8,,0,0,0,0,0,0,unary,0x6610EF90,FPU Fix; truncate ST0 toward zero
+1,0xDF,1,FnFixR8,,0,0,0,0,0,0,unary,0x6610EF90,FPU Fix (duplicate)
+1,0xE0,1,FnFixCy,,2,2,0,0,0,0,unary,0x6610EFA0,Currency Fix via __vbaCyFix
+1,0xE1,3,FnFixVar,%a,4,4,0,0,0,0,unary,0x66109CBE,Variant Fix via __vbaVarFix; modify in-place
+1,0xE2,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xE3,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xE4,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xE5,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xE6,1,FnIntR8,,0,0,0,0,0,0,unary,0x6610EFB0,FPU Int; floor ST0
+1,0xE7,1,FnIntR8,,0,0,0,0,0,0,unary,0x6610EFB0,FPU Int (duplicate)
+1,0xE8,1,FnIntCy,,2,2,0,0,0,0,unary,0x6610EFC0,Currency Int via __vbaCyInt
+1,0xE9,3,FnIntVar,%a,4,4,0,0,0,0,unary,0x66109CBE,Variant Int via __vbaVarInt; modify in-place
+1,0xEA,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xEB,3,FnLenVar,%a,4,1,0,0,0,0,stack,0x6610EFD0,Variant Len; pop 16B Variant push i32 length via __vbaLenVar
+1,0xEC,1,FnLenStr,,1,1,0,0,0,0,stack,0x6610A110,Lead0 FnLenStr: shares primary handler; SysStringLen
+1,0xED,3,FnLenBVar,%a,4,1,0,0,0,0,stack,0x6610EFE0,Variant LenB; pop 16B Variant push i32 byte length
+1,0xEE,1,FnLenBStr,,1,1,0,0,0,0,stack,0x6610EFF0,String LenB; pop BSTR push byte length (SysStringByteLen)
+1,0xEF,3,ConcatVar,%a,4,4,0,0,0,0,arith,0x66109CBE,Variant concatenation via __vbaVarCat; %a=2nd Variant
+1,0xF0,1,ConcatStr,,2,1,0,0,0,0,arith,0x66108F1D,Lead0 ConcatStr: shares primary handler; __vbaStrCat
+1,0xF1,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xF2,1,FnSgnUI1,,1,1,0,0,0,0,unary,0x6610F000,UI1 Sgn; TOS → 0 or 1 (always positive for unsigned)
+1,0xF3,1,FnSgnUI1,,1,1,0,0,0,0,unary,0x6610F000,FnSgnUI1 (duplicate)
+1,0xF4,1,FnSgnI4,,1,1,0,0,0,0,unary,0x6610F010,I4 Sgn; TOS → -1/0/1
+1,0xF5,1,FnSgnR8,,0,0,0,0,0,0,unary,0x6610F020,FPU Sgn R8; ST0 → -1.0/0.0/1.0
+1,0xF6,1,FnSgnR4,,0,0,0,0,0,0,unary,0x6610F020,FPU Sgn R4; ST0 → -1.0/0.0/1.0
+1,0xF7,1,FnSgnCy,,2,2,0,0,0,0,unary,0x6610F030,Currency Sgn; 2 Cy slots → 2 Cy slots (-10000/0/10000)
+1,0xF8,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xF9,1,InvalidExcode,,0,0,0,0,0,0,,,
+1,0xFA,1,SeekFile,,2,0,0,0,0,0,call,0x6610F050,VB Seek statement; pop filenum + position
+1,0xFB,1,NameFile,,2,0,0,0,0,0,call,0x6610F060,VB Name statement; pop 2 BSTRs (old new); rename file
+1,0xFC,1,CStrI2,,1,1,0,0,0,0,convert,0x6610F070,Convert I2 to BSTR via __vbaCStrI2; pop i32 push BSTR ptr
+1,0xFD,1,CStrUI1,,1,1,0,0,0,0,convert,0x6610F080,Convert UI1 to BSTR via __vbaCStrUI1; pop i32 push BSTR ptr
+1,0xFE,1,CStrI4,,1,1,0,0,0,0,convert,0x6610F090,Convert I4 to BSTR via __vbaCStrI4; pop i32 push BSTR ptr
+1,0xFF,1,CStrR4,,0,1,1,0,0,0,convert,0x6610F0A0,Convert FPU R4 to BSTR; pop FPU ST0 push BSTR ptr
+2,0x00,1,CStrR8,,0,1,1,0,0,0,convert,0x6610D765,R8(FPU)→Str via __vbaStrR8; pop FPU ST0; push BSTR ptr
+2,0x01,1,CStrCy,,2,1,0,0,0,0,convert,0x6610D7A9,Cy(2 slots)→Str via __vbaStrCy; pop 8B; push BSTR ptr
+2,0x02,1,CStrVar,,4,1,0,0,0,0,convert,0x661090B7,Var(4 slots)→Str via __vbaStrVarCopy; pop 16B; push BSTR ptr
+2,0x03,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x04,1,CCyI2,,1,2,0,0,0,0,convert,0x6610A9A3,I2→Cy; pop 1 slot; multiply by 10000; push 2 slots (8B Cy)
+2,0x05,1,CCyI2,,1,2,0,0,0,0,convert,0x6610A9A3,I2→Cy (duplicate slot); same handler as 0x04
+2,0x06,1,CCyI4,,1,2,0,0,0,0,convert,0x6610A9BF,I4→Cy; pop 1 slot; multiply by 10000; push 2 slots (8B Cy)
+2,0x07,1,CCyR4,,0,2,1,0,0,0,convert,0x6610A9CF,R4(FPU)→Cy via __vbaCyR4; pop FPU; push 2 eval slots
+2,0x08,1,CCyR4,,0,2,1,0,0,0,convert,0x6610A9CF,R4(FPU)→Cy (duplicate slot); same handler as 0x07
+2,0x09,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x0A,1,CCyVar,,4,2,0,0,0,0,convert,0x6610D6F5,Var(4 slots)→Cy via __vbaCyVar; pop 16B; push 2 slots
+2,0x0B,1,CCyStr,,1,2,0,0,0,0,convert,0x6610D81D,Str→Cy; pop BSTR; convert to Cy; push 2 eval slots
+2,0x0C,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x0D,1,CUI1I2,,1,1,0,0,0,0,convert,0x6610D581,I2→UI1; in-place range check (byte must be 0); overflow error if >255
+2,0x0E,1,CUI1I4,,1,1,0,0,0,0,convert,0x6610D598,I4→UI1; in-place range check (upper 3 bytes must be 0)
+2,0x0F,1,CUI1R4,,0,1,1,0,0,0,convert,0x6610D5BD,R4(FPU)→UI1; round FPU to int; range check 0-255; push eval
+2,0x10,1,CUI1R4,,0,1,1,0,0,0,convert,0x6610D5BD,R4(FPU)→UI1 (duplicate slot); same handler as 0x0F
+2,0x11,1,CUI1Cy,,2,1,0,0,0,0,convert,0x6610D5B1,Cy→UI1; pop 2 Cy slots; divide by 10000; range check; push UI1
+2,0x12,1,CUI1Var,,4,1,0,0,0,0,convert,0x6610D5FC,Var→UI1; pop 16B Variant; convert via runtime; push UI1
+2,0x13,1,CUI1Str,,1,1,0,0,0,0,convert,0x6610D7C8,Str→UI1; pop BSTR; convert to byte; push UI1
+2,0x14,1,CI2UI1,,1,1,0,0,0,0,convert,0x66108F81,UI1→I2; trivial widening; byte value already valid i16
+2,0x15,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x16,1,CI2I4,,1,1,0,0,0,0,convert,0x6610A9E3,I4→I2; truncate with overflow check (-32768..32767)
+2,0x17,1,CI2R8,,0,1,1,0,0,0,convert,0x6610A9E9,R8(FPU)→I2; pop FPU; round to i16; overflow check; push eval
+2,0x18,1,CI2R8,,0,1,1,0,0,0,convert,0x6610A9E9,R8(FPU)→I2 (duplicate slot); same handler as 0x17
+2,0x19,1,CI2Cy,,2,1,0,0,0,0,convert,0x6610A9EF,Cy→I2; pop 2 slots; divide by 10000; push i16 as i32
+2,0x1A,1,CI2Var,,4,1,0,0,0,0,convert,0x6610A95A,Var→I2; pop 16B Variant; convert to i16; push as i32
+2,0x1B,1,CI2Str,,1,1,0,0,0,0,convert,0x66109159,Str→I2; pop BSTR; convert to i16; push as i32
+2,0x1C,1,CI4UI1,,1,1,0,0,0,0,convert,0x6610A9EB,UI1→I4; in-place zero-extend byte to i32
+2,0x1D,1,CI4UI1,,1,1,0,0,0,0,convert,0x6610A9EB,UI1→I4 (duplicate slot); same handler as 0x1C
+2,0x1E,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x1F,1,CI4R8,,0,1,1,0,0,0,convert,0x6610A9F3,R8(FPU)→I4; pop FPU; round to i32 via __vbaFpI4; overflow check
+2,0x20,1,CI4R8,,0,1,1,0,0,0,convert,0x6610A9F3,R8(FPU)→I4 (duplicate slot); same handler as 0x1F
+2,0x21,1,CI4Cy,,2,1,0,0,0,0,convert,0x6610A9FD,Cy→I4; pop 2 slots (8B); divide by 10000; push i32
+2,0x22,1,CI4Var,,4,1,0,0,0,0,convert,0x66108FF0,Var→I4; pop 16B Variant; convert to i32; push
+2,0x23,1,CI4Str,,1,1,0,0,0,0,convert,0x6610A988,Str→I4; pop BSTR; convert via __vbaI4Str; push i32
+2,0x24,1,FnCSngI2,,1,0,0,1,0,0,convert,0x66108FFB,I2→R8(FPU); pop eval i16; fild push FPU double
+2,0x25,1,FnCSngI2,,1,0,0,1,0,0,convert,0x66108FFB,I2→R8(FPU) (duplicate slot); same handler
+2,0x26,1,CR4I4,,1,0,0,1,0,0,convert,0x6610A011,I4→R8(FPU); pop eval i32; fild push FPU double
+2,0x27,1,CR4R8,,0,0,0,0,0,0,convert,0x66108FE1,R8(FPU)→R4; frndint/precision; FPU identity; ST0 stays
+2,0x28,1,CR4R8,,0,0,0,0,0,0,convert,0x66108FE1,R8(FPU)→R4 (duplicate slot); same handler
+2,0x29,1,CR8Cy,,2,0,0,1,0,0,convert,0x6610A95D,Cy→R8(FPU); pop 2 eval slots; convert to double; push FPU
+2,0x2A,1,CR8Var,,4,0,0,1,0,0,convert,0x6610A940,Var→R8(FPU); pop 16B Variant; convert to double; push FPU
+2,0x2B,1,CR4Str,,1,0,0,1,0,0,convert,0x66109175,Str→R4(FPU); pop BSTR; convert via __vbaR4Str; push FPU
+2,0x2C,1,FnCSngI2,,1,0,0,1,0,0,convert,0x66108FFB,I2→FPU (duplicate slot); same handler as 0x24
+2,0x2D,1,FnCSngI2,,1,0,0,1,0,0,convert,0x66108FFB,I2→FPU (duplicate slot); same handler as 0x24
+2,0x2E,1,CR4I4,,1,0,0,1,0,0,convert,0x6610A011,I4→FPU (duplicate slot); same handler as 0x26
+2,0x2F,1,CR8R4,,0,0,0,0,0,0,convert,0x66108FE1,R4(FPU)→R8; FPU identity; ST0 stays; no-op
+2,0x30,1,CR8R4,,0,0,0,0,0,0,convert,0x66108FE1,R4(FPU)→R8 (duplicate slot); same handler
+2,0x31,1,CR8Cy,,2,0,0,1,0,0,convert,0x6610A95D,Cy→R8(FPU) (duplicate slot); same handler as 0x29
+2,0x32,1,CR8Var,,4,0,0,1,0,0,convert,0x6610A940,Var→R8(FPU) (duplicate slot); same handler as 0x2A
+2,0x33,1,CR8Str,,1,0,0,1,0,0,convert,0x6610D7FB,Str→R8(FPU); pop BSTR; convert via __vbaR8Str; push FPU
+2,0x34,1,CAdVar,,4,1,0,0,0,0,convert,0x661092AF,Var→Ad; pop 16B Variant; extract IUnknown ptr; push
+2,0x35,1,CRefVarAry,,4,1,0,0,0,0,convert,0x661092E9,Var array ref conversion; pop Variant; push array ref
+2,0x36,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x37,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x38,1,CUI1Bool,,1,1,0,0,0,0,convert,0x6610D5EB,Bool→UI1; pop i32 bool; mask to byte; push UI1
+2,0x39,1,FnCDblCy,,2,0,0,1,0,0,convert,0x6610D684,Cy→Double(FPU); pop 2 Cy slots; convert; push FPU
+2,0x3A,1,FnCDblR8,,0,0,0,0,0,0,convert,0x6610D690,R8(FPU)→Double; FPU identity; no-op
+2,0x3B,1,FnCDblR8,,0,0,0,0,0,0,convert,0x6610D690,R8→Double (duplicate slot); same handler as 0x3A
+2,0x3C,1,FnCSngI2,,1,0,0,1,0,0,convert,0x66108FFB,I2→FPU (duplicate slot); same handler as 0x24
+2,0x3D,1,FnCSngI2,,1,0,0,1,0,0,convert,0x66108FFB,I2→FPU (duplicate slot); same handler as 0x24
+2,0x3E,1,FnCSngI4,,1,0,0,1,0,0,convert,0x6610D648,I4→Single(FPU); pop eval i32; push FPU float
+2,0x3F,1,CSng,,0,0,0,0,0,0,convert,0x6610D64C,R4(FPU)→Single; FPU round to f32 precision; ST0 stays
+2,0x40,1,CSng,,0,0,0,0,0,0,convert,0x6610D64C,R4→Single (duplicate slot); same handler as 0x3F
+2,0x41,1,FnCSngCy,,2,0,0,1,0,0,convert,0x6610D665,Cy→Single(FPU); pop 2 Cy slots; convert; push FPU
+2,0x42,1,FnCSngVar,,4,0,0,1,0,0,convert,0x6610D65E,Var→Single(FPU); pop 16B Variant; convert; push FPU
+2,0x43,1,FnCSngStr,,1,0,0,1,0,0,convert,0x66109175,Str→Single(FPU); pop BSTR; convert; push FPU (same as CR4Str)
+2,0x44,1,FnCByteVar,,4,1,0,0,0,0,convert,0x6610D86D,Var→Byte; pop 16B Variant; convert to UI1; push
+2,0x45,1,FnCIntVar,,4,1,0,0,0,0,convert,0x6610917F,Var→Int(I2); pop 16B Variant; convert to i16; push as i32
+2,0x46,1,FnCLngVar,,4,1,0,0,0,0,convert,0x66109191,Var→Long(I4); pop 16B Variant; convert to i32; push
+2,0x47,1,CDateR8,,0,0,0,0,0,0,convert,0x66108FE1,R8(FPU)→Date; FPU identity (Date=R8); ST0 stays
+2,0x48,1,FnCDblVar,,4,0,0,1,0,0,convert,0x6610D673,Var→Double(FPU); pop 16B Variant; convert to R8; push FPU
+2,0x49,1,FnCCurVar,,4,2,0,0,0,0,convert,0x6610D87F,Var→Currency; pop 16B Variant; convert to Cy; push 2 slots
+2,0x4A,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x4B,1,FnCStrVar,,4,1,0,0,0,0,convert,0x6610D892,Var→String; pop 16B Variant; convert to BSTR; push ptr
+2,0x4C,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x4D,1,FnCBoolVar,,4,1,0,0,0,0,convert,0x6610D8A4,Var→Bool; pop 16B Variant; convert to VB bool; push i32
+2,0x4E,1,FnCDateVar,,4,0,0,1,0,0,convert,0x6610D85C,Var→Date(FPU); pop 16B Variant; convert to R8 date; push FPU
+2,0x4F,1,FnCDateVar,,4,0,0,1,0,0,convert,0x6610D85C,Var→Date (duplicate slot); same handler as 0x4E
+2,0x50,1,CBoolUI1,,1,1,0,0,0,0,convert,0x66109075,UI1→Bool; pop byte; convert to VB bool (-1/0); push i32
+2,0x51,1,CBoolUI1,,1,1,0,0,0,0,convert,0x66109075,UI1→Bool (duplicate slot); same handler as 0x50
+2,0x52,1,CBoolI4,,1,1,0,0,0,0,convert,0x6610906F,I4→Bool; pop i32; convert to VB bool (-1/0); push
+2,0x53,1,CBoolR4,,0,1,1,0,0,0,convert,0x6610D711,R4(FPU)→Bool; pop FPU; compare to 0; push VB bool
+2,0x54,1,CBoolR4,,0,1,1,0,0,0,convert,0x6610D711,R4(FPU)→Bool (duplicate slot); same handler as 0x53
+2,0x55,1,CBoolCy,,2,1,0,0,0,0,convert,0x6610A96A,Cy→Bool; pop 2 Cy slots; convert to VB bool; push i32
+2,0x56,1,CBoolVar,,4,1,0,0,0,0,convert,0x66109093,Var→Bool; pop 16B Variant; convert to VB bool; push i32
+2,0x57,1,CBoolStr,,1,1,0,0,0,0,convert,0x6610914F,Str→Bool; pop BSTR; convert to VB bool; push i32
+2,0x58,1,CStr2Uni,,1,1,0,0,0,0,convert,0x6610DABF,Convert ANSI string to Unicode; pop BSTR; push new BSTR
+2,0x59,1,CStrAry2Uni,,1,1,0,0,0,0,convert,0x6610DAD0,Convert ANSI string array to Unicode; pop array ref; push
+2,0x5A,1,CStr2Ansi,,1,1,0,0,0,0,convert,0x6610A0B0,Convert Unicode to ANSI string; pop BSTR; push ANSI BSTR
+2,0x5B,1,CStrAry2Ansi,,1,1,0,0,0,0,convert,0x6610DAE1,Convert Unicode string array to ANSI; pop array ref; push
+2,0x5C,1,PopAdLd4,,1,1,0,0,4,0,stack,0x66108F9B,Pop address; load i32 from that address; push value (deref)
+2,0x5D,3,CRecAnsi2Uni,%s,0,0,0,0,0,0,convert,0x6610E2C0,Convert UDT record fields ANSI→Unicode in-place; no stack change
+2,0x5E,3,CRecUni2Ansi,%s,0,0,0,0,0,0,convert,0x6610E2C0,Convert UDT record fields Unicode→ANSI in-place; no stack change
+2,0x5F,3,CStr2Vec,%a,0,0,0,0,0,0,convert,0x6610DA6D,Convert BSTR to fixed-length string vector at %a frame slot
+2,0x60,3,CVar2Vec,%a,0,0,0,0,0,0,convert,0x66109310,Convert Variant to vector at %a frame slot
+2,0x61,5,CVec2Var,%a %a,0,0,0,0,0,0,convert,0x6610DA87,Convert vector from %a to Variant at %a; frame-to-frame
+2,0x62,1,SetLastError,,0,1,0,0,0,0,stack,0x6610A118,Push Win32 GetLastError() result as i32; same handler as primary
+2,0x63,1,LitNothing,,0,1,0,0,0,0,load_lit,0x66109A36,Push Nothing (null COM pointer) as i32 onto eval stack
+2,0x64,2,LitVar_Null,%a,0,0,0,0,0,16,store_frame,0x6610EBC4,Write Null Variant (VT_NULL) to frame slot [EBP+op]
+2,0x65,3,LitVar_TRUE,%a,0,0,0,0,0,16,store_frame,0x66109A90,Write True Variant (VT_BOOL=-1) to frame slot [EBP+op]
+2,0x66,3,LitVar_FALSE,%a,0,0,0,0,0,16,store_frame,0x66109A90,Write False Variant (VT_BOOL=0) to frame slot [EBP+op]
+2,0x67,3,LitVar_Empty,%a,0,0,0,0,0,16,store_frame,0x6610EBB3,Write Empty Variant (VT_EMPTY) to frame slot [EBP+op]
+2,0x68,3,LitVar_Missing,%a,0,4,0,0,0,0,load_lit,0x6610A174,Push 16B Missing Variant (vbError) onto eval stack; 4 slots
+2,0x69,5,VCallHresult,%v,-1,0,0,0,0,0,call,0x6610A43B,COM vtable call; %v=vtable_offset+argsize; pops args+this; HRESULT checked
+2,0x6A,5,ThisVCallHresult,%2 %c,-1,0,0,0,0,0,call,0x6610A4A0,COM vtable call on Me; %c=import %2=vtable_offset; HRESULT checked
+2,0x6B,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x6C,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x6D,1,ExitProcHresult,,0,0,0,0,0,0,return,0x6610A51D,Return HRESULT from function; cleanup + frame restore
+2,0x6E,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x6F,3,CheckTypeVar,%c,4,1,0,0,0,0,compare,0x6610F1CC,TypeOf..Is check on Variant; pop 16B Var; push i32 bool
+2,0x70,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x71,1,CUnkVar,,4,1,0,0,0,0,convert,0x661092C9,Var→IUnknown; pop 16B Variant; extract IUnknown ptr; push
+2,0x72,3,CVarUnk,%a,1,4,0,0,0,0,convert,0x6610D8E8,IUnknown→Var; pop ptr; wrap in Variant(VT_UNKNOWN); push 4 slots
+2,0x73,1,LdPrUnkVar,,0,1,0,0,4,0,load_frame,0x6610DF66,Load IUnknown from Variant at [EBP+op]; push ptr
+2,0x74,9,FLdLateIdUnkVar,%a %4 %a,0,1,0,0,4,0,load_frame,0x6610E947,Late-bound load of IUnknown from Variant; push ptr
+2,0x75,1,GetRec3,,3,0,0,0,0,0,io,0x6610DD3C,Get record from file (3-arg); pop filenum+recnum+buffer
+2,0x76,1,GetRec4,,4,0,0,0,0,0,io,0x6610DD5E,Get record from file (4-arg); pop filenum+recnum+buffer+len
+2,0x77,1,PutRec3,,3,0,0,0,0,0,io,0x6610DD4D,Put record to file (3-arg); pop filenum+recnum+buffer
+2,0x78,1,PutRec4,,4,0,0,0,0,0,io,0x6610DD6F,Put record to file (4-arg); pop filenum+recnum+buffer+len
+2,0x79,-1,GetRecOwner3,,-1,0,0,0,0,0,io,0x6610DD80,Get record with owner (3-arg); variable-length
+2,0x7A,-1,GetRecOwner4,,-1,0,0,0,0,0,io,0x6610DDA5,Get record with owner (4-arg); variable-length
+2,0x7B,-1,PutRecOwner3,,-1,0,0,0,0,0,io,0x6610DD9D,Put record with owner (3-arg); variable-length
+2,0x7C,-1,PutRecOwner4,,-1,0,0,0,0,0,io,0x6610DDC2,Put record with owner (4-arg); variable-length
+2,0x7D,1,Input,,2,0,0,0,0,0,io,0x6610DBC2,Input# statement; pop filenum+prompt; begin input sequence
+2,0x7E,1,InputDone,,0,0,0,0,0,0,io,0x6610DBD3,End Input# sequence; finalize parsing
+2,0x7F,1,InputItemUI1,,1,0,0,0,0,1,io,0x6610DBE4,Input# read UI1 item; pop dest addr; store byte
+2,0x80,1,InputItemI2,,1,0,0,0,0,2,io,0x6610DC28,Input# read I2 item; pop dest addr; store i16
+2,0x81,1,InputItemI4,,1,0,0,0,0,4,io,0x6610DC79,Input# read I4 item; pop dest addr; store i32
+2,0x82,1,InputItemR4,,1,0,0,0,0,4,io,0x6610DC58,Input# read R4 item; pop dest addr; store float
+2,0x83,1,InputItemR8,,1,0,0,0,0,8,io,0x6610DCA4,Input# read R8 item; pop dest addr; store double
+2,0x84,1,InputItemCy,,1,0,0,0,0,8,io,0x6610DCAA,Input# read Cy item; pop dest addr; store 8B currency
+2,0x85,1,InputItemVar,,1,0,0,0,0,16,io,0x6610DCB0,Input# read Variant item; pop dest addr; store 16B Variant
+2,0x86,1,InputItemStr,,1,0,0,0,0,4,io,0x6610DC2E,Input# read String item; pop dest BSTR ptr addr; store
+2,0x87,1,InputItemBool,,1,0,0,0,0,2,io,0x6610DC04,Input# read Bool item; pop dest addr; store VB bool
+2,0x88,1,InputItemDate,,1,0,0,0,0,8,io,0x6610DC7F,Input# read Date item; pop dest addr; store R8 date
+2,0x89,1,PopFPR4,,0,1,1,0,0,0,stack,0x66108FA4,Pop x87 ST0; store as f32 on eval stack (1 slot); fpu_pop=1
+2,0x8A,1,PopFPR8,,0,2,1,0,0,0,stack,0x66108FB8,Pop x87 ST0; store as f64 on eval stack (2 slots); fpu_pop=1
+2,0x8B,1,PopAd,,1,0,0,0,0,4,stack,0x6610A5D9,Pop address from eval stack; store i32 to that address
+2,0x8C,1,PopAdLdVar,,1,1,0,0,16,0,stack,0x66108F32,Pop addr; load 16B Variant from *addr; push as 4 slots
+2,0x8D,3,AryLdPr,%2,2,1,0,0,4,0,load_ind,0x6610D128,Pop index+array (multi-dim %2); push COM obj ref; AddRef
+2,0x8E,3,AryLdRf,%2,2,1,0,0,4,0,load_ind,0x6610D148,Pop index+array (multi-dim %2); push address (LEA)
+2,0x8F,5,ParmAry1St,%a %a,0,0,0,0,0,0,stack,0x66108EBE,Setup 1-D array parameter; reads %a %a operands
+2,0x90,1,Ary1LdUI1,,2,1,0,0,1,0,load_ind,0x6610CF8B,Pop index+array; read u8 from array[index]; zext push i32
+2,0x91,1,Ary1LdI2,,2,1,0,0,2,0,load_ind,0x6610CF8C,Pop index+array; read i16 from array[index]; zext push i32
+2,0x92,1,Ary1LdI4,,2,1,0,0,4,0,load_ind,0x6610CFB8,Pop index+array; read i32 from array[index]; push
+2,0x93,1,Ary1LdI4,,2,1,0,0,4,0,load_ind,0x6610CFB8,Pop index+array; read i32 (duplicate slot); same handler
+2,0x94,1,Ary1LdR8,,2,2,0,0,8,0,load_ind,0x6610CFE8,Pop index+array; read 8B R8/Cy from array[index]; push 2 slots
+2,0x95,1,Ary1LdR8,,2,2,0,0,8,0,load_ind,0x6610CFE8,Pop index+array; read 8B (duplicate slot); same handler
+2,0x96,1,Ary1LdRfVar,,2,1,0,0,4,0,load_ind,0x6610D00C,Pop index+array; push address of Variant at array[index] (LEA)
+2,0x97,1,Ary1LdI4,,2,1,0,0,4,0,load_ind,0x6610CFB8,Pop index+array; read i32 (duplicate slot); same handler
+2,0x98,1,Ary1LdI4,,2,1,0,0,4,0,load_ind,0x6610CFB8,Pop index+array; read i32 (duplicate slot); same handler
+2,0x99,1,Ary1LdFPR4,,2,0,0,1,4,0,load_ind,0x6610D018,Pop index+array; read f32 from array[index]; push FPU
+2,0x9A,1,Ary1LdFPR8,,2,0,0,1,8,0,load_ind,0x6610D038,Pop index+array; read f64 from array[index]; push FPU
+2,0x9B,1,Ary1LdPr,,2,1,0,0,4,0,load_ind,0x6610CF78,Pop index+array; push COM obj from array[index]; AddRef
+2,0x9C,1,Ary1LdRf,,2,1,0,0,4,0,load_ind,0x6610CF5C,Pop index+array; push address of array[index] (LEA)
+2,0x9D,1,Ary1LdVar,,2,4,0,0,16,0,load_ind,0x6610F2D4,Pop index+array; read 16B Variant from array[index]; push 4 slots
+2,0x9E,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0x9F,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xA0,1,Ary1StUI1,,3,0,0,0,0,1,store_ind,0x6610D03E,Pop val+index+array; store u8 to array[index]
+2,0xA1,1,Ary1StI2,,3,0,0,0,0,2,store_ind,0x6610D058,Pop val+index+array; store i16 to array[index]
+2,0xA2,1,Ary1StR4,,3,0,0,0,0,4,store_ind,0x6610D088,Pop val+index+array; store i32/R4 to array[index]
+2,0xA3,1,Ary1StR4,,3,0,0,0,0,4,store_ind,0x6610D088,Pop val+index+array; store i32/R4 (duplicate slot)
+2,0xA4,1,Ary1StCy,,4,0,0,0,0,8,store_ind,0x6610D0B8,Pop 2_val+index+array; store 8B Cy to array[index]
+2,0xA5,1,Ary1StCy,,4,0,0,0,0,8,store_ind,0x6610D0B8,Pop 2_val+index+array; store 8B Cy (duplicate slot)
+2,0xA6,1,Ary1StVar,,6,0,0,0,0,16,store_ind,0x6610D168,Pop 4 Var slots+index+array; store 16B Variant to array[index]
+2,0xA7,1,Ary1StStr,,3,0,0,0,0,4,store_ind,0x6610F45D,Pop BSTR+index+array; store BSTR to array[index]; SysFreeString old
+2,0xA8,1,Ary1StAd,,3,0,0,0,0,4,store_ind,0x6610F549,Pop ptr+index+array; store COM ptr to array[index]; Release old
+2,0xA9,1,Ary1StFPR4,,2,0,1,0,0,4,store_ind,0x6610D0E8,Pop index+array; pop FPU ST0; store f32 to array[index]
+2,0xAA,1,Ary1StFPR8,,2,0,1,0,0,8,store_ind,0x6610D108,Pop index+array; pop FPU ST0; store f64 to array[index]
+2,0xAB,1,Ary1StVarAd,,3,0,0,0,0,4,store_ind,0x6610A1A9,Pop ptr+index+array; store COM ptr to array; Set semantics
+2,0xAC,1,Ary1StVarAdFunc,,3,0,0,0,0,4,store_ind,0x6610F627,Pop ptr+index+array; store COM ptr to array; func return Set
+2,0xAD,1,Ary1StVarUnk,,3,0,0,0,0,4,store_ind,0x6610F6BE,Pop IUnknown+index+array; store to Variant array; QI
+2,0xAE,1,Ary1StVarUnkFunc,,3,0,0,0,0,4,store_ind,0x6610F6A2,Pop IUnknown+index+array; store to Variant array; func return
+2,0xAF,1,Ary1StAdFunc,,3,0,0,0,0,4,store_ind,0x6610F533,Pop ptr+index+array; store COM ptr; func return
+2,0xB0,1,Ary1StVarCopy,,6,0,0,0,0,16,store_ind,0x6610F81E,Pop Variant(4)+index+array; copy 16B Variant to array[index]
+2,0xB1,1,Ary1StStrCopy,,3,0,0,0,0,4,store_ind,0x6610D1A0,Pop BSTR+index+array; __vbaStrCopy to array[index]
+2,0xB2,3,Ary1LdRfVarg,%2,2,1,0,0,4,0,load_ind,0x6610F33C,Pop index+array; push addr of Variant element (Varg LEA); %2=dims
+2,0xB3,1,Ary1LdVarg,,2,4,0,0,16,0,load_ind,0x6610F2E3,Pop index+array; load Variant from Varg array; push 4 slots
+2,0xB4,1,Ary1LdRfVargParam,,2,1,0,0,4,0,load_ind,0x6610F35D,Pop index+array; push addr of Varg Variant (param array)
+2,0xB5,1,Ary1StVarg,,6,0,0,0,0,16,store_ind,0x6610F8E4,Pop Variant(4)+index+array; store 16B to Varg array
+2,0xB6,1,Ary1StVargCopy,,6,0,0,0,0,16,store_ind,0x6610F8C2,Pop Variant(4)+index+array; copy 16B to Varg array
+2,0xB7,1,Ary1StVargAd,,3,0,0,0,0,4,store_ind,0x6610F649,Pop ptr+index+array; store COM ptr to Varg array; Set
+2,0xB8,1,Ary1StVargAdFunc,,3,0,0,0,0,4,store_ind,0x6610F631,Pop ptr+index+array; store COM ptr to Varg; func return Set
+2,0xB9,1,Ary1StVargUnk,,3,0,0,0,0,4,store_ind,0x6610F74D,Pop IUnknown+index+array; store to Varg Variant; QI
+2,0xBA,1,Ary1StVargUnkFunc,,3,0,0,0,0,4,store_ind,0x6610F738,Pop IUnknown+index+array; store to Varg Variant; func return
+2,0xBB,1,MidVar,,3,1,0,0,0,0,stack,0x6611049E,Mid$ on Variant; pop str+start+len; push result Variant
+2,0xBC,3,MidBStr,%2,3,1,0,0,0,0,stack,0x6610A278,Mid$ string; pop str+start+len; push BSTR result (%2 operand)
+2,0xBD,1,MidBVar,,3,1,0,0,0,0,stack,0x661104AF,MidB$ on Variant; byte-oriented Mid; pop+push
+2,0xBE,3,MidBStrB,%2,3,1,0,0,0,0,stack,0x66110486,MidB$ string; byte-oriented Mid; pop str+start+len; push BSTR (%2 operand)
+2,0xBF,1,LineInputVar,,1,1,0,0,0,0,io,0x6610DD0E,Line Input# to Variant; pop filenum; push Variant with line
+2,0xC0,1,LineInputStr,,1,1,0,0,0,0,io,0x6610DD1A,Line Input# to String; pop filenum; push BSTR with line
+2,0xC1,1,Error,,1,0,0,0,0,0,stack,0x6610A140,Raise VB runtime error; pop error number; Err.Raise
+2,0xC2,1,Stop,,0,0,0,0,0,0,stack,0x6610CF3E,Stop statement; break into debugger
+2,0xC3,1,Erase,,-1,0,0,0,0,0,stack,0x6610A2E0,Erase array; reads frame offset; calls __vbaErase
+2,0xC4,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Large BOS (Begin Of Statement); debug marker; u8 line operand
+2,0xC5,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xC6,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xC7,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xC8,1,End,,0,0,0,0,0,0,stack,0x66108D4B,End statement; terminate program execution
+2,0xC9,1,Return,,0,0,0,0,0,0,branch,0x66108F18,GoSub Return; pop return address from internal stack; jump back
+2,0xCA,1,FnLBound,,1,1,0,0,0,0,stack,0x6610A130,Pop array SafeArray ptr; push LBound as i32
+2,0xCB,1,FnUBound,,1,1,0,0,0,0,stack,0x66108E04,Pop array SafeArray ptr; push UBound as i32
+2,0xCC,1,ExitProcUI1,,0,0,0,0,0,0,return,0x661100C9,Return from Function As Byte; return value in eval TOS
+2,0xCD,1,ExitProcI2,,0,0,0,0,0,0,return,0x6610A535,Return from Function As Integer; return value in eval TOS
+2,0xCE,1,ExitProcStr,,0,0,0,0,0,0,return,0x6610A529,Return from Function As String; cleanup + frame restore
+2,0xCF,1,ExitProcR4,,0,0,0,0,0,0,return,0x6610A541,Return from Function As Single; return value on x87 ST0
+2,0xD0,1,ExitProcR8,,0,0,0,0,0,0,return,0x6610A54D,Return from Function As Double; return value on x87 ST0
+2,0xD1,1,ExitProcCy,,0,0,0,0,0,0,return,0x6610A559,Return from Function As Currency; return value in EDX:EAX
+2,0xD2,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xD3,1,ExitProcStr,,0,0,0,0,0,0,return,0x6610A529,Return from Function As String (duplicate); same handler as 0xCE
+2,0xD4,1,ExitProcStr,,0,0,0,0,0,0,return,0x6610A529,Return from Function As String (duplicate); same handler as 0xCE
+2,0xD5,1,ExitProcStr,,0,0,0,0,0,0,return,0x6610A529,Return from Function As String (duplicate); same handler as 0xCE
+2,0xD6,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xD7,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xD8,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xD9,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xDA,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xDB,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xDC,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xDD,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xDE,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xDF,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xE0,3,FLdUI1,%a,0,1,0,0,1,0,load_frame,0x6610DEBC,Load u8 from [EBP+sext(op)]; zero-extend to i32; push 1 slot
+2,0xE1,3,FLdI2,%a,0,1,0,0,2,0,load_frame,0x66109372,Load i16 from [EBP+sext(op)]; zero-extend to i32; push 1 slot
+2,0xE2,3,FLdR4,%a,0,1,0,0,4,0,load_frame,0x66108E9F,Load i32/R4 from [EBP+sext(op)]; push 1 slot (ILdRf handler)
+2,0xE3,3,FLdR4,%a,0,1,0,0,4,0,load_frame,0x66108E9F,Load i32/R4 (duplicate slot); same handler
+2,0xE4,3,FLdR8,%a,0,2,0,0,8,0,load_frame,0x6610DEF5,Load 8B R8 from [EBP+sext(op)]; push 2 eval slots
+2,0xE5,3,FLdR8,%a,0,2,0,0,8,0,load_frame,0x6610DEF5,Load 8B R8 (duplicate slot); same handler
+2,0xE6,3,FLdRfVar,%a,0,1,0,0,4,0,load_frame,0x66108E95,Push addr of Variant at [EBP+sext(op)] (LEA not LOAD)
+2,0xE7,3,FLdR4,%a,0,1,0,0,4,0,load_frame,0x66108E9F,Load i32/R4 (duplicate slot); ILdRf handler
+2,0xE8,3,FLdR4,%a,0,1,0,0,4,0,load_frame,0x66108E9F,Load i32/R4 (duplicate slot); ILdRf handler
+2,0xE9,3,FLdFPR4,%a,0,0,0,1,4,0,load_frame,0x661093BA,Load f32 from [EBP+sext(op)] onto FPU; fld dword
+2,0xEA,3,FLdFPR8,%a,0,0,0,1,8,0,load_frame,0x661093CD,Load f64 from [EBP+sext(op)] onto FPU; fld qword
+2,0xEB,3,FLdPr,%a,0,1,0,0,4,0,load_frame,0x66108EC5,Load COM obj ref from [EBP+sext(op)]; push ptr
+2,0xEC,3,FLdRfVar,%a,0,1,0,0,4,0,load_frame,0x66108E95,Push addr of Variant (duplicate slot); LEA
+2,0xED,3,FLdVar,%a,0,4,0,0,16,0,load_frame,0x66109FA1,Load 16B Variant from [EBP+sext(op)]; push 4 eval slots
+2,0xEE,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xEF,1,InvalidExcode,,0,0,0,0,0,0,,,
+2,0xF0,3,FStUI1,%a,1,0,0,0,0,1,store_frame,0x6610DF0E,Pop i32 (use low byte); store u8 to [EBP+sext(op)]
+2,0xF1,3,FStI2,%a,1,0,0,0,0,2,store_frame,0x6610940B,Pop i32 (use low 16); store i16 to [EBP+sext(op)]
+2,0xF2,3,FStR4,%a,1,0,0,0,0,4,store_frame,0x6610DF1A,Pop 1 slot; store i32/R4 to [EBP+sext(op)]
+2,0xF3,3,FStR4,%a,1,0,0,0,0,4,store_frame,0x6610DF1A,Pop 1 slot; store R4 (duplicate slot); same handler
+2,0xF4,3,FStR8,%a,2,0,0,0,0,8,store_frame,0x6610DF31,Pop 2 slots; store 8B R8 to [EBP+sext(op)]
+2,0xF5,3,FStR8,%a,2,0,0,0,0,8,store_frame,0x6610DF31,Pop 2 slots; store R8 (duplicate slot); same handler
+2,0xF6,3,FStVar,%a,4,0,0,0,0,16,store_frame,0x6610A24F,Pop 4 Variant slots; store 16B to [EBP+sext(op)]; VarCopy
+2,0xF7,3,FStStr,%a,1,0,0,0,0,4,store_frame,0x6610A05D,Pop BSTR; swap with frame slot; SysFreeString old
+2,0xF8,3,FStAd,%a,1,0,0,0,0,4,store_frame,0x6610A15C,Pop COM ptr; store to [EBP+sext(op)]; Release old
+2,0xF9,3,FStFPR4,%a,0,0,1,0,0,4,store_frame,0x6610940D,Pop FPU ST0; store f32 to [EBP+sext(op)]; fstp dword
+2,0xFA,3,FStFPR8,%a,0,0,1,0,0,8,store_frame,0x66109420,Pop FPU ST0; store f64 to [EBP+sext(op)]; fstp qword
+2,0xFB,3,FStVarAd,%a,1,0,0,0,0,4,store_frame,0x6610F54D,Pop COM ptr; Set to Variant at [EBP+sext(op)]; Set semantics
+2,0xFC,3,FStVarAdFunc,%a,1,0,0,0,0,4,store_frame,0x6610A173,Pop COM ptr (func return); Set to Variant; Set + func return
+2,0xFD,3,FStVarUnk,%a,1,0,0,0,0,4,store_frame,0x6610F663,Pop IUnknown; store to Variant at [EBP+sext(op)]; QI
+2,0xFE,3,FStVarUnkFunc,%a,1,0,0,0,0,4,store_frame,0x6610F64D,Pop IUnknown (func return); store to Variant; QI + func return
+2,0xFF,3,FStAdFunc,%a,1,0,0,0,0,4,store_frame,0x66108F00,Pop COM ptr; store to func return value slot
+3,0x00,3,FStVarCopy,%a,4,0,0,0,0,16,store_frame,0x6610A1F5,Pop 4 Variant slots; copy 16B to [EBP+sext(op)]; VarCopy
+3,0x01,3,FStStrCopy,%a,1,0,0,0,0,4,store_frame,0x6610A0A0,Pop BSTR; __vbaStrCopy to [EBP+sext(op)]; copy semantics
+3,0x02,1,HardType,,1,1,0,0,0,0,convert,0x6610A2B0,Pop ptr; verify/cast COM type; push validated ptr
+3,0x03,3,Branch,%l,0,0,0,0,0,0,branch,0x66108F38,Unconditional branch; target = pcode_base + zx(u16 operand)
+3,0x04,3,BranchF,%l,1,0,0,0,0,0,branch,0x66108F5C,Pop TOS; if False (==0) take branch to %l target
+3,0x05,3,BranchFVar,%l,4,0,0,0,0,0,branch,0x6610A208,Pop 16B Variant (4 slots); test for False; branch if false
+3,0x06,3,BranchFVarFree,%l,4,0,0,0,0,0,branch,0x6610D395,Pop 16B Variant; test for False; branch if false; VarClear after
+3,0x07,3,BranchT,%l,1,0,0,0,0,0,branch,0x66108F76,Pop TOS; if True (!=0) take branch to %l target
+3,0x08,3,BranchTVar,%l,4,0,0,0,0,0,branch,0x6610D388,Pop 16B Variant (4 slots); test for True; branch if true
+3,0x09,3,BranchTVarFree,%l,4,0,0,0,0,0,branch,0x6610D3B7,Pop 16B Variant; test for True; branch if true; VarClear after
+3,0x0A,3,Gosub,%l,0,0,0,0,0,0,branch,0x66108EEE,GoSub; push return addr to internal stack; branch to %l
+3,0x0B,3,OnErrorGoto,%l,0,0,0,0,0,0,branch,0x66109F58,Set error handler target in frame; %l=handler addr; no stack effect
+3,0x0C,3,Resume,%l,0,0,0,0,0,0,branch,0x6610F212,Resume [Next|label]; jump to resume target; clear error state
+3,0x0D,3,AryLock,%a,1,0,0,0,0,0,stack,0x6610E2F0,Pop SafeArray ptr; SafeArrayLock; %a=frame slot
+3,0x0E,3,AryUnlock,%a,1,0,0,0,0,0,stack,0x6610E2E0,Pop SafeArray ptr; SafeArrayUnlock; %a=frame slot
+3,0x0F,3,AryDescTemp,%a,0,1,0,0,0,0,stack,0x6610A168,Push addr of temp SafeArray descriptor; %a=frame slot
+3,0x10,3,ILdUI1,%a,0,1,0,0,1,0,load_ind,0x6610E4B3,Double-deref: ptr=[EBP+sext(op)]; read u8 from *ptr; zext push i32
+3,0x11,3,ILdI2,%a,0,1,0,0,2,0,load_ind,0x66109774,Double-deref: ptr=[EBP+sext(op)]; read i16 from *ptr; zext push i32
+3,0x12,3,ILdAd,%a,0,1,0,0,4,0,load_ind,0x66109798,Double-deref: ptr=[EBP+sext(op)]; read i32 from *ptr; push
+3,0x13,3,ILdAd,%a,0,1,0,0,4,0,load_ind,0x66109798,Double-deref i32 (duplicate slot); same handler
+3,0x14,3,ILdR8,%a,0,2,0,0,8,0,load_ind,0x661097BC,Double-deref: ptr=[EBP+sext(op)]; read R8; push 2 slots
+3,0x15,3,ILdR8,%a,0,2,0,0,8,0,load_ind,0x661097BC,Double-deref R8 (duplicate slot); same handler
+3,0x16,5,ILdRfDarg,%a,0,1,0,0,4,0,load_ind,0x66109FC0,Double-deref: load ref to Variant (DARG); %a %2 operands; push addr
+3,0x17,3,ILdAd,%a,0,1,0,0,4,0,load_ind,0x66109798,Double-deref i32 (duplicate slot); same handler
+3,0x18,3,ILdAd,%a,0,1,0,0,4,0,load_ind,0x66109798,Double-deref i32 (duplicate slot); same handler
+3,0x19,3,ILdFPR4,%a,0,0,0,1,4,0,load_ind,0x661097E6,Double-deref: ptr=[EBP+sext(op)]; fld dword *ptr → FPU
+3,0x1A,3,ILdFPR8,%a,0,0,0,1,8,0,load_ind,0x661097FA,Double-deref: ptr=[EBP+sext(op)]; fld qword *ptr → FPU
+3,0x1B,3,ILdPr,%a,0,1,0,0,4,0,load_ind,0x661097B2,Double-deref: load COM ptr from *[EBP+sext(op)]; AddRef; push
+3,0x1C,3,FLdR4,%a,0,1,0,0,4,0,load_ind,0x66108E9F,Double-deref: load i32/R4 from *[EBP+sext(op)]; push (ILdRf handler)
+3,0x1D,3,ILdDarg,%a,0,4,0,0,16,0,load_ind,0x6610F330,Double-deref: load 16B Variant(DARG) from *[EBP+sext(op)]; push 4 slots
+3,0x1E,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x1F,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x20,3,IStUI1,%a,1,0,0,0,0,1,store_ind,0x6610E500,Pop i32(use low byte); store u8 via double-deref *[EBP+sext(op)]
+3,0x21,3,IStI2,%a,1,0,0,0,0,2,store_ind,0x661097F6,Pop i32(use low 16); store i16 via double-deref *[EBP+sext(op)]
+3,0x22,3,IStI4,%a,1,0,0,0,0,4,store_ind,0x66109814,Pop i32; store via double-deref *[EBP+sext(op)]
+3,0x23,3,IStI4,%a,1,0,0,0,0,4,store_ind,0x66109814,Store i32 (duplicate slot); same handler
+3,0x24,3,IStR8,%a,2,0,0,0,0,8,store_ind,0x66109830,Pop 2 slots (8B); store R8 via double-deref
+3,0x25,3,IStR8,%a,2,0,0,0,0,8,store_ind,0x66109830,Store R8 (duplicate slot); same handler
+3,0x26,3,IStDarg,%a,1,0,0,0,0,4,store_ind,0x6610A298,Pop value; store to dispatch arg (DARG) slot; %a=frame offset
+3,0x27,3,IStStr,%a,1,0,0,0,0,4,store_ind,0x6610A096,Pop BSTR; store via double-deref; SysFreeString old; ownership transfer
+3,0x28,3,IStAd,%a,1,0,0,0,0,4,store_ind,0x6610F4EB,Pop COM ptr; store via double-deref; Release old
+3,0x29,3,IStFPR4,%a,0,0,1,0,0,4,store_ind,0x66109856,Pop FPU ST0; store f32 via double-deref (fstp dword)
+3,0x2A,3,IStFPR8,%a,0,0,1,0,0,8,store_ind,0x6610986C,Pop FPU ST0; store f64 via double-deref (fstp qword)
+3,0x2B,3,IStDargAd,%a,1,0,0,0,0,4,store_ind,0x6610F59E,Pop COM ptr; store to DARG Variant; Set semantics
+3,0x2C,3,IStDargAdFunc,%a,1,0,0,0,0,4,store_ind,0x6610F554,Pop COM ptr (func return); store to DARG Variant; Set
+3,0x2D,3,IStDargUnk,%a,1,0,0,0,0,4,store_ind,0x6610F734,Pop IUnknown; store to DARG Variant; QI
+3,0x2E,3,IStDargUnkFunc,%a,1,0,0,0,0,4,store_ind,0x6610F6C2,Pop IUnknown (func return); store to DARG Variant; QI
+3,0x2F,3,IStAdFunc,%a,1,0,0,0,0,4,store_ind,0x6610A0F2,Pop COM ptr (func return); store via double-deref; Release old
+3,0x30,3,IStDargCopy,%a,4,0,0,0,0,16,store_ind,0x6610F8EB,Pop 4 Variant slots; VarCopy to DARG at *[EBP+sext(op)]
+3,0x31,3,IStStrCopy,%a,1,0,0,0,0,4,store_ind,0x6610A0A3,Pop BSTR; __vbaStrCopy via double-deref; copy semantics
+3,0x32,1,PrintChan,,1,0,0,0,0,0,io,0x6610DBA0,Pop file number; set print channel for subsequent Print ops
+3,0x33,1,WriteChan,,1,0,0,0,0,0,io,0x6610DBB1,Pop file number; set write channel for Write# statement
+3,0x34,1,PrintComma,,0,0,0,0,0,0,io,0x6610FA01,Print comma separator (advance to next print zone)
+3,0x35,1,PrintEos,,0,0,0,0,0,0,io,0x6610F9CE,Print end-of-statement; finalize current Print# line
+3,0x36,1,PrintNL,,0,0,0,0,0,0,io,0x6610FA1E,Print newline; output CR+LF
+3,0x37,1,PrintItemComma,,1,0,0,0,0,0,io,0x6610F99B,Pop value; print it; followed by comma separator
+3,0x38,1,PrintItemSemi,,1,0,0,0,0,0,io,0x6610F9BD,Pop value; print it; followed by semicolon (no separator)
+3,0x39,1,PrintItemNL,,1,0,0,0,0,0,io,0x6610F9AC,Pop value; print it; followed by newline
+3,0x3A,3,PrintObj,%a,1,0,0,0,0,0,io,0x6610FA26,Pop object; print via Debug.Print or Print# on object; %a operand
+3,0x3B,1,PrintSpc,,1,0,0,0,0,0,io,0x6610F9DF,Pop count; output Spc(n) spaces
+3,0x3C,1,PrintTab,,1,0,0,0,0,0,io,0x6610F9F0,Pop column; Tab(n) to column position
+3,0x3D,1,Close,,1,0,0,0,0,0,io,0x66109353,Pop file number; Close file
+3,0x3E,1,CloseAll,,0,0,0,0,0,0,io,0x6610DB8C,Close all open files; no stack effect
+3,0x3F,3,FLdZeroAd,%a,0,1,0,0,0,0,load_lit,0x66108F97,Push i32 zero (0x00000000) onto eval stack; %a operand
+3,0x40,3,IWMemLdUI1,%2,1,1,0,0,1,0,load_mem,0x6610E590,Pop With-obj; read u8 at obj+%2 offset; zext push i32
+3,0x41,3,IWMemLdI2,%2,1,1,0,0,2,0,load_mem,0x6610E5AB,Pop With-obj; read i16 at obj+%2 offset; zext push i32
+3,0x42,3,IWMemLdI4,%2,1,1,0,0,4,0,load_mem,0x6610E5C6,Pop With-obj; read i32 at obj+%2 offset; push
+3,0x43,3,IWMemLdI4,%2,1,1,0,0,4,0,load_mem,0x6610E5C6,Pop With-obj; read i32 (duplicate slot); same handler
+3,0x44,3,IWMemLdCy,%2,1,2,0,0,8,0,load_mem,0x6610E5DF,Pop With-obj; read 8B Cy at obj+%2; push 2 slots
+3,0x45,3,IWMemLdCy,%2,1,2,0,0,8,0,load_mem,0x6610E5DF,Pop With-obj; read 8B Cy (duplicate slot); same handler
+3,0x46,5,IWMemLdRfDarg,%a %2,0,1,0,0,4,0,load_mem,0x6610F34D,Load ref to DARG via With-obj member; %a %2 operands; push addr
+3,0x47,3,IWMemLdI4,%2,1,1,0,0,4,0,load_mem,0x6610E5C6,Pop With-obj; read i32 (duplicate slot); same handler
+3,0x48,3,IWMemLdI4,%2,1,1,0,0,4,0,load_mem,0x6610E5C6,Pop With-obj; read i32 (duplicate slot); same handler
+3,0x49,3,IWMemLdFPR4,%2,1,0,0,1,4,0,load_mem,0x6610E5FB,Pop With-obj; load f32 from obj+%2 → FPU
+3,0x4A,3,IWMemLdFPR8,%2,1,0,0,1,8,0,load_mem,0x6610E614,Pop With-obj; load f64 from obj+%2 → FPU
+3,0x4B,3,IWMemLdPr,%2,1,1,0,0,4,0,load_mem,0x6610F380,Pop With-obj; load COM ptr from obj+%2; AddRef; push
+3,0x4C,3,IWMemLdRf,%2,1,1,0,0,4,0,load_mem,0x6610E62D,Pop With-obj; push addr of obj+%2 (LEA)
+3,0x4D,3,IWMemLdDarg,%2,1,4,0,0,16,0,load_mem,0x6610F315,Pop With-obj; load 16B Variant from obj+%2; push 4 slots
+3,0x4E,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x4F,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x50,3,IWMemStUI1,%2,2,0,0,0,0,1,store_mem,0x6610E645,Pop val + With-obj; store u8 at obj+%2
+3,0x51,3,IWMemStI2,%2,2,0,0,0,0,2,store_mem,0x6610E65F,Pop val + With-obj; store i16 at obj+%2
+3,0x52,3,IWMemStR4,%2,2,0,0,0,0,4,store_mem,0x6610E67A,Pop val + With-obj; store R4/i32 at obj+%2
+3,0x53,3,IWMemStR4,%2,2,0,0,0,0,4,store_mem,0x6610E67A,Store R4 (duplicate slot); same handler
+3,0x54,3,IWMemStCy,%2,3,0,0,0,0,8,store_mem,0x6610E693,Pop 2 val + With-obj; store 8B Cy at obj+%2
+3,0x55,3,IWMemStCy,%2,3,0,0,0,0,8,store_mem,0x6610E693,Store Cy (duplicate slot); same handler
+3,0x56,3,IWMemStDarg,%2,5,0,0,0,0,16,store_mem,0x6610F925,Pop 4 Variant + With-obj; store 16B DARG at obj+%2
+3,0x57,3,IWMemStStr,%2,2,0,0,0,0,4,store_mem,0x6610F3E8,Pop BSTR + With-obj; store BSTR at obj+%2; SysFreeString old
+3,0x58,3,IWMemStAd,%2,2,0,0,0,0,4,store_mem,0x6610F507,Pop COM ptr + With-obj; store at obj+%2; Release old
+3,0x59,3,IWMemStFPR4,%2,1,0,1,0,0,4,store_mem,0x6610E6AF,Pop With-obj; pop FPU ST0; store f32 at obj+%2
+3,0x5A,3,IWMemStFPR8,%2,1,0,1,0,0,8,store_mem,0x6610E6D2,Pop With-obj; pop FPU ST0; store f64 at obj+%2
+3,0x5B,3,IWMemStDargAd,%2,2,0,0,0,0,4,store_mem,0x6610F5B4,Pop COM ptr + With-obj; Set DARG Variant at obj+%2
+3,0x5C,3,IWMemStDargAdFunc,%2,2,0,0,0,0,4,store_mem,0x6610F5A2,Pop COM ptr(func) + With-obj; Set DARG at obj+%2
+3,0x5D,3,IWMemStDargUnk,%2,2,0,0,0,0,4,store_mem,0x6610F766,Pop IUnknown + With-obj; store to DARG at obj+%2; QI
+3,0x5E,3,IWMemStDargUnkFunc,%2,2,0,0,0,0,4,store_mem,0x6610F751,Pop IUnknown(func) + With-obj; store DARG; QI
+3,0x5F,3,IWMemStAdFunc,%2,2,0,0,0,0,4,store_mem,0x6610F4F2,Pop COM ptr(func) + With-obj; store at obj+%2; Release old
+3,0x60,3,IWMemStDargCopy,%2,5,0,0,0,0,16,store_mem,0x6610F902,Pop 4 Variant + With-obj; VarCopy to DARG at obj+%2
+3,0x61,3,IWMemStStrCopy,%2,2,0,0,0,0,4,store_mem,0x6610F408,Pop BSTR + With-obj; __vbaStrCopy to obj+%2
+3,0x62,3,FLdZeroAd,%a,0,1,0,0,0,0,load_lit,0x66108F97,Push i32 zero (duplicate slot); same handler as 0x3F
+3,0x63,3,FStVarNoPop,%a,0,0,0,0,0,16,store_frame,0x6610F84C,Copy TOS 4 Variant slots to [EBP+sext(op)]; NO pop
+3,0x64,3,FStStrNoPop,%a,0,0,0,0,0,4,store_frame,0x6610A098,Copy TOS BSTR to [EBP+sext(op)]; NO pop; TOS stays
+3,0x65,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x66,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x67,3,CVarUI1,%a,1,0,0,0,0,16,convert,0x6610D8B6,Pop UI1; write as Variant(vbByte) to [EBP+sext(op)]; no eval push
+3,0x68,3,CVarI2,%a,1,4,0,0,0,0,convert,0x6610A1A0,Pop i32 (i16 val); push as 16B Variant(vbInteger); 4 slots
+3,0x69,3,CVarI4,%a,1,0,0,0,0,16,convert,0x661091F8,Pop i32; write as Variant(vbLong) to [EBP+sext(op)]; no eval push
+3,0x6A,3,CVarR4,%a,0,0,1,0,0,16,convert,0x661091FE,Pop FPU ST0; write as Variant(vbSingle) to [EBP+sext(op)]
+3,0x6B,3,CVarR8,%a,0,0,1,0,0,16,convert,0x66109225,Pop FPU ST0; write as Variant(vbDouble) to [EBP+sext(op)]
+3,0x6C,3,CVarCy,%a,2,4,0,0,0,0,convert,0x6610A1F0,Pop 2 Cy slots; push as 16B Variant(vbCurrency); 4 eval slots
+3,0x6D,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x6E,3,CVarStr,%a,1,4,0,0,0,0,convert,0x6610A1CC,Pop BSTR ptr; push as 16B Variant(vbString); 4 eval slots
+3,0x6F,3,CVarAd,%a,1,0,0,0,0,16,convert,0x661091D2,Pop COM ptr; write as Variant(vbObject) to [EBP+sext(op)]
+3,0x70,3,MemLdUI1,%2,1,1,0,0,1,0,load_mem,0x6610EF98,Pop obj ptr; read u8 at obj+%2 offset; zext push i32
+3,0x71,3,MemLdI2,%2,1,1,0,0,2,0,load_mem,0x66109884,Pop obj ptr; read i16 at obj+%2; push i32 (zext)
+3,0x72,3,MemLdR4,%2,1,1,0,0,4,0,load_mem,0x661098B2,Pop obj ptr; read i32/R4 at obj+%2; push (MemLdStr handler)
+3,0x73,3,MemLdR4,%2,1,1,0,0,4,0,load_mem,0x661098B2,Pop obj ptr; read R4 (duplicate slot); same handler
+3,0x74,3,MemLdR8,%2,1,2,0,0,8,0,load_mem,0x661098DA,Pop obj ptr; read R8 at obj+%2; push 2 slots
+3,0x75,3,MemLdR8,%2,1,2,0,0,8,0,load_mem,0x661098DA,Pop obj ptr; read R8 (duplicate slot); same handler
+3,0x76,3,MemLdRfVar,%2,1,1,0,0,4,0,load_mem,0x66108EB3,Pop obj ptr; push addr of Variant at obj+%2 (LEA)
+3,0x77,3,MemLdR4,%2,1,1,0,0,4,0,load_mem,0x661098B2,Pop obj ptr; read R4 (duplicate slot); same handler
+3,0x78,3,MemLdR4,%2,1,1,0,0,4,0,load_mem,0x661098B2,Pop obj ptr; read R4 (duplicate slot); same handler
+3,0x79,3,MemLdFPR4,%2,1,0,0,1,4,0,load_mem,0x6610990A,Pop obj ptr; load f32 from obj+%2 → FPU
+3,0x7A,3,MemLdFPR8,%2,1,0,0,1,8,0,load_mem,0x66109924,Pop obj ptr; load f64 from obj+%2 → FPU
+3,0x7B,3,MemLdPr,%2,1,1,0,0,4,0,load_mem,0x661098F2,Pop obj ptr; load COM ptr from obj+%2; AddRef; push
+3,0x7C,3,MemLdRfVar,%2,1,1,0,0,4,0,load_mem,0x66108EB3,Pop obj ptr; push addr of Variant (duplicate slot); LEA
+3,0x7D,3,MemLdVar,%2,1,4,0,0,16,0,load_mem,0x6610F299,Pop obj ptr; read 16B Variant from obj+%2; push 4 slots
+3,0x7E,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x7F,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x80,3,MemStUI1,%2,2,0,0,0,0,1,store_mem,0x6610EFFE,Pop val + obj ptr; store u8 at obj+%2
+3,0x81,3,MemStI2,%2,2,0,0,0,0,2,store_mem,0x6610990E,Pop val + obj ptr; store i16 at obj+%2
+3,0x82,3,MemStR4,%2,2,0,0,0,0,4,store_mem,0x66109928,Pop val + obj ptr; store R4/i32 at obj+%2
+3,0x83,3,MemStR4,%2,2,0,0,0,0,4,store_mem,0x66109928,Pop val + obj ptr; store R4 (duplicate slot); same handler
+3,0x84,3,MemStCy,%2,3,0,0,0,0,8,store_mem,0x66109944,Pop 2 val + obj ptr; store 8B Cy at obj+%2
+3,0x85,3,MemStCy,%2,3,0,0,0,0,8,store_mem,0x66109944,Pop Cy (duplicate slot); same handler
+3,0x86,3,MemStVar,%2,5,0,0,0,0,16,store_mem,0x6610F8B4,Pop 4 Variant + obj ptr; store 16B Variant at obj+%2
+3,0x87,3,MemStStr,%2,2,0,0,0,0,4,store_mem,0x6610F428,Pop BSTR + obj ptr; store BSTR at obj+%2; SysFreeString old
+3,0x88,3,MemStAd,%2,2,0,0,0,0,4,store_mem,0x6610A103,Pop COM ptr + obj ptr; store at obj+%2; Release old
+3,0x89,3,MemStFPR4,%2,1,0,1,0,0,4,store_mem,0x6610996C,Pop obj ptr; pop FPU ST0; store f32 at obj+%2
+3,0x8A,3,MemStFPR8,%2,1,0,1,0,0,8,store_mem,0x66109988,Pop obj ptr; pop FPU ST0; store f64 at obj+%2
+3,0x8B,3,MemStVarAd,%2,2,0,0,0,0,4,store_mem,0x6610F5E4,Pop COM ptr + obj ptr; Set Variant at obj+%2; Set semantics
+3,0x8C,3,MemStVarAdFunc,%2,2,0,0,0,0,4,store_mem,0x6610F5CF,Pop COM ptr(func) + obj ptr; Set Variant at obj+%2
+3,0x8D,3,MemStVarUnk,%2,2,0,0,0,0,4,store_mem,0x6610F680,Pop IUnknown + obj ptr; store to Variant at obj+%2; QI
+3,0x8E,3,MemStVarUnkFunc,%2,2,0,0,0,0,4,store_mem,0x6610F667,Pop IUnknown(func) + obj; store Variant at obj+%2; QI
+3,0x8F,3,MemStAdFunc,%2,2,0,0,0,0,4,store_mem,0x6610F522,Pop COM ptr(func) + obj ptr; store at obj+%2; Release old
+3,0x90,3,MemStVarCopy,%2,5,0,0,0,0,16,store_mem,0x6610F83E,Pop 4 Variant + obj ptr; VarCopy to obj+%2
+3,0x91,3,MemStStrCopy,%2,2,0,0,0,0,4,store_mem,0x6610A0B0,Pop BSTR + obj ptr; __vbaStrCopy to obj+%2
+3,0x92,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x93,3,CDargRef,%a,0,4,0,0,0,0,convert,0x66109291,Push 16B Variant ByRef to DARG at [EBP+sext(op)]; 4 slots
+3,0x94,5,CVarRef,%a,0,4,0,0,0,0,convert,0x6610A218,Push 16B Variant ByRef pointing to [EBP+sext(op)]; 4 slots
+3,0x95,3,ExitProcCb,%a,0,0,0,0,0,0,return,0x6611009C,Return from callback procedure; %a=stack cleanup size
+3,0x96,3,ExitProcCbStack,%a,0,0,0,0,0,0,return,0x6611001D,Return from callback with stack return; %a=cleanup size
+3,0x97,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x98,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0x99,3,FFree1Var,%a,0,0,0,0,0,0,stack,0x6610A0D8,Clear Variant at [EBP+sext(op)]; __vbaVarClear
+3,0x9A,3,FFree1Str,%a,0,0,0,0,0,0,stack,0x6610A0C8,Free BSTR at [EBP+sext(op)]; SysFreeString + set NULL
+3,0x9B,3,FFree1Ad,%a,0,0,0,0,0,0,stack,0x66108F04,Free COM obj at [EBP+sext(op)]; Release + set NULL
+3,0x9C,3,FStAdNoPop,%a,0,0,0,0,0,4,store_frame,0x6610A158,Store TOS COM ptr to [EBP+sext(op)]; NO pop; Release old
+3,0x9D,3,FStAdFuncNoPop,%a,0,0,0,0,0,4,store_frame,0x6610A0D0,Store TOS to func return slot; NO pop; value stays on stack
+3,0x9E,1,FLdPrThis,,0,1,0,0,4,0,load_frame,0x66108F07,Push this pointer from frame slot [EBP-0x30]
+3,0x9F,1,LdPrVar,,0,1,0,0,4,0,load_frame,0x6610948F,Load COM ptr from Variant at frame; push; AddRef
+3,0xA0,3,ImpAdLdUI1,%c,0,1,0,0,1,0,load_ind,0x6610E840,Load u8 via import address table; %c=import index; push i32
+3,0xA1,3,ImpAdLdI2,%c,0,1,0,0,2,0,load_ind,0x661096D4,Load i16 via import address; %c=import; push i32
+3,0xA2,3,ImpAdLdStr,%c,0,1,0,0,4,0,load_ind,0x661096F4,Load i32/Str via import address; push 4B
+3,0xA3,3,ImpAdLdStr,%c,0,1,0,0,4,0,load_ind,0x661096F4,Load i32/Str (duplicate slot); same handler
+3,0xA4,3,ImpAdLdCy,%c,0,2,0,0,8,0,load_ind,0x66109714,Load 8B Cy via import address; push 2 slots
+3,0xA5,3,ImpAdLdCy,%c,0,2,0,0,8,0,load_ind,0x66109714,Load Cy (duplicate slot); same handler
+3,0xA6,3,ImpAdLdRf,%c,0,1,0,0,4,0,load_ind,0x66108EA3,Load addr via import address (LEA); push ptr
+3,0xA7,3,ImpAdLdStr,%c,0,1,0,0,4,0,load_ind,0x661096F4,Load i32/Str (duplicate slot); same handler
+3,0xA8,3,ImpAdLdStr,%c,0,1,0,0,4,0,load_ind,0x661096F4,Load i32/Str (duplicate slot); same handler
+3,0xA9,3,ImpAdLdFPR4,%c,0,0,0,1,4,0,load_ind,0x6610973C,Load f32 via import address → FPU
+3,0xAA,3,ImpAdLdFPR8,%c,0,0,0,1,8,0,load_ind,0x66109754,Load f64 via import address → FPU
+3,0xAB,3,ImpAdLdPr,%c,0,1,0,0,4,0,load_ind,0x661096CE,Load COM ptr via import address; AddRef; push
+3,0xAC,3,ImpAdLdRf,%c,0,1,0,0,4,0,load_ind,0x66108EA3,Load addr via import (LEA) (duplicate); same handler
+3,0xAD,3,ImpAdLdVar,%c,0,4,0,0,16,0,load_ind,0x6610F2C3,Load 16B Variant via import address; push 4 slots
+3,0xAE,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0xAF,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0xB0,3,ImpAdStUI1,%c,1,0,0,0,0,1,store_ind,0x6610E8AD,Pop i32(low byte); store u8 via import address
+3,0xB1,3,ImpAdStI2,%c,1,0,0,0,0,2,store_ind,0x66109714,Pop val; store i16 via import address
+3,0xB2,3,ImpAdStR4,%c,1,0,0,0,0,4,store_ind,0x66109730,Pop val; store R4/i32 via import address
+3,0xB3,3,ImpAdStR4,%c,1,0,0,0,0,4,store_ind,0x66109730,Store R4 (duplicate slot); same handler
+3,0xB4,3,ImpAdStR8,%c,2,0,0,0,0,8,store_ind,0x6610974C,Pop 2 slots; store R8 via import address
+3,0xB5,3,ImpAdStR8,%c,2,0,0,0,0,8,store_ind,0x6610974C,Store R8 (duplicate slot); same handler
+3,0xB6,3,ImpAdStVar,%c,4,0,0,0,0,16,store_ind,0x6610F887,Pop 4 Variant slots; store 16B via import address; VarCopy
+3,0xB7,3,ImpAdStStr,%c,1,0,0,0,0,4,store_ind,0x6610F439,Pop BSTR; store via import address; SysFreeString old
+3,0xB8,3,ImpAdStAd,%c,1,0,0,0,0,4,store_ind,0x6610F52C,Pop COM ptr; store via import address; Release old
+3,0xB9,3,ImpAdStFPR4,%c,0,0,1,0,0,4,store_ind,0x6610976C,Pop FPU ST0; store f32 via import address
+3,0xBA,3,ImpAdStFPR8,%c,0,0,1,0,0,8,store_ind,0x66109784,Pop FPU ST0; store f64 via import address
+3,0xBB,3,ImpAdStVarAd,%c,1,0,0,0,0,4,store_ind,0x6610F623,Pop COM ptr; Set Variant via import address
+3,0xBC,3,ImpAdStVarAdFunc,%c,1,0,0,0,0,4,store_ind,0x6610F60D,Pop COM ptr(func return); Set Variant via import
+3,0xBD,3,ImpAdStVarUnk,%c,1,0,0,0,0,4,store_ind,0x6610F69E,Pop IUnknown; store to Variant via import; QI
+3,0xBE,3,ImpAdStVarUnkFunc,%c,1,0,0,0,0,4,store_ind,0x6610F684,Pop IUnknown(func); store Variant via import; QI
+3,0xBF,3,ImpAdStAdFunc,%c,1,0,0,0,0,4,store_ind,0x6610A160,Pop COM ptr(func return); store via import; Release old
+3,0xC0,3,ImpAdStVarCopy,%c,4,0,0,0,0,16,store_ind,0x6610F82D,Pop 4 Variant slots; VarCopy to import address target
+3,0xC1,3,ImpAdStStrCopy,%c,1,0,0,0,0,4,store_ind,0x6610F44B,Pop BSTR; __vbaStrCopy via import address
+3,0xC2,3,PopTmpLdAd1,%a,0,1,0,0,0,0,stack,0x66110152,Push addr of temp 1-byte slot in frame housekeeping; %a
+3,0xC3,3,PopTmpLdAd2,%a,0,1,0,0,0,0,stack,0x66108F22,Push addr of temp 2-byte slot in frame housekeeping; %a
+3,0xC4,3,PopTmpLdAdStr,%a,0,1,0,0,0,0,stack,0x66108F2E,Push addr of temp BSTR slot in frame housekeeping; %a
+3,0xC5,3,PopTmpLdAd8,%a,0,1,0,0,0,0,stack,0x66108F2A,Push addr of temp 8-byte slot in frame housekeeping; %a
+3,0xC6,3,PopTmpLdAdVar,%a,0,1,0,0,0,0,stack,0x66110184,Push addr of temp 16B Variant slot in frame; %a
+3,0xC7,3,PopTmpLdAdStr,%a,0,1,0,0,0,0,stack,0x66108F2E,Push addr of temp BSTR slot (duplicate); same handler as 0xC4
+3,0xC8,3,PopTmpLdAdFPR4,%a,0,1,0,0,0,0,stack,0x661101A4,Push addr of temp f32 slot in frame; %a
+3,0xC9,3,PopTmpLdAdFPR8,%a,0,1,0,0,0,0,stack,0x661101C5,Push addr of temp f64 slot in frame; %a
+3,0xCA,3,CopyBytes,%2,-1,0,0,0,0,0,stack,0x6610A148,Variable-length memcpy; %2=byte count
+3,0xCB,5,ExitForCollObj,%a %l,0,0,0,0,0,0,branch,0x6610E45D,Exit For Each (collection/object); cleanup iterator; branch %l
+3,0xCC,5,ExitForCollObj,%a %l,0,0,0,0,0,0,branch,0x6610E45D,Exit For Each (duplicate slot); same handler
+3,0xCD,5,ExitForCollObj,%a %l,0,0,0,0,0,0,branch,0x6610E45D,Exit For Each (duplicate slot); same handler
+3,0xCE,5,ExitForAryVar,%a %l,0,0,0,0,0,0,branch,0x6610E49D,Exit For Each (array Variant); cleanup; branch %l; %a=frame
+3,0xCF,5,ExitForVar,%a %l,0,0,0,0,0,0,branch,0x6610E48D,Exit For (Variant counter); cleanup; branch %l; %a=frame
+3,0xD0,5,FMemLdUI1,%a %2,0,1,0,0,1,0,load_mem,0x6610F077,Load u8 from [this+%2]; this from [EBP+%a]; push i32
+3,0xD1,5,FMemLdI2,%a %2,0,1,0,0,2,0,load_mem,0x66109972,Load i16 from [this+%2]; this from frame; push i32
+3,0xD2,5,FMemLdR4,%a %2,0,1,0,0,4,0,load_mem,0x6610999C,Load R4 from [this+%2]; this from frame; push 4B
+3,0xD3,5,FMemLdR4,%a %2,0,1,0,0,4,0,load_mem,0x6610999C,Load R4 (duplicate slot); same handler
+3,0xD4,5,FMemLdR8,%a %2,0,2,0,0,8,0,load_mem,0x661099C0,Load R8 from [this+%2]; this from frame; push 2 slots
+3,0xD5,5,FMemLdR8,%a %2,0,2,0,0,8,0,load_mem,0x661099C0,Load R8 (duplicate slot); same handler
+3,0xD6,5,FMemLdRf,%a %2,0,1,0,0,4,0,load_mem,0x66108EC5,Push addr of [this+%2]; this from frame (LEA)
+3,0xD7,5,FMemLdR4,%a %2,0,1,0,0,4,0,load_mem,0x6610999C,Load R4 (duplicate slot); same handler
+3,0xD8,5,FMemLdR4,%a %2,0,1,0,0,4,0,load_mem,0x6610999C,Load R4 (duplicate slot); same handler
+3,0xD9,5,FMemLdFPR4,%a %2,0,0,0,1,4,0,load_mem,0x661099E8,Load f32 from [this+%2] → FPU
+3,0xDA,5,FMemLdFPR8,%a %2,0,0,0,1,8,0,load_mem,0x661099FC,Load f64 from [this+%2] → FPU
+3,0xDB,5,FMemLdPr,%a %2,0,1,0,0,4,0,load_mem,0x661099D0,Load COM ptr from [this+%2]; AddRef; push
+3,0xDC,5,FMemLdRf,%a %2,0,1,0,0,4,0,load_mem,0x66108EC5,Push addr (LEA) (duplicate slot); same handler
+3,0xDD,5,FMemLdVar,%a %2,0,4,0,0,16,0,load_mem,0x6610F2A7,Load 16B Variant from [this+%2]; push 4 slots
+3,0xDE,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0xDF,1,InvalidExcode,,0,0,0,0,0,0,,,
+3,0xE0,5,FMemStUI1,%a %2,1,0,0,0,0,1,store_mem,0x6610F109,Pop i32(low byte); store u8 to [this+%2]
+3,0xE1,5,FMemStI2,%a %2,1,0,0,0,0,2,store_mem,0x661099F0,Pop i32(low 16); store i16 to [this+%2]
+3,0xE2,5,FMemStR4,%a %2,1,0,0,0,0,4,store_mem,0x66109A10,Pop i32; store R4/i32 to [this+%2]
+3,0xE3,5,FMemStR4,%a %2,1,0,0,0,0,4,store_mem,0x66109A10,Store R4 (duplicate slot); same handler
+3,0xE4,5,FMemStR8,%a %2,2,0,0,0,0,8,store_mem,0x66109A30,Pop 2 slots; store R8 to [this+%2]
+3,0xE5,5,FMemStR8,%a %2,2,0,0,0,0,8,store_mem,0x66109A30,Store R8 (duplicate slot); same handler
+3,0xE6,5,FMemStVar,%a %2,4,0,0,0,0,16,store_mem,0x6610F898,Pop 4 Variant; store 16B to [this+%2]; VarCopy
+3,0xE7,5,FMemStStr,%a %2,1,0,0,0,0,4,store_mem,0x6610A0BE,Pop BSTR; store to [this+%2]; SysFreeString old
+3,0xE8,5,FMemStAd,%a %2,1,0,0,0,0,4,store_mem,0x6610A117,Pop COM ptr; store to [this+%2]; Release old
+3,0xE9,5,FMemStFPR4,%a %2,0,0,1,0,0,4,store_mem,0x6610940D,Pop FPU ST0; store f32 to [this+%2]
+3,0xEA,5,FMemStFPR8,%a %2,0,0,1,0,0,8,store_mem,0x66109420,Pop FPU ST0; store f64 to [this+%2]
+3,0xEB,5,FMemStVarAd,%a %2,1,0,0,0,0,4,store_mem,0x6610F609,Pop COM ptr; Set Variant at [this+%2]
+3,0xEC,5,FMemStVarAdFunc,%a %2,1,0,0,0,0,4,store_mem,0x6610F5E8,Pop COM ptr(func); Set Variant at [this+%2]
+3,0xED,5,FMemStVarUnk,%a %2,1,0,0,0,0,4,store_mem,0x6610F7AA,Pop IUnknown; store to Variant at [this+%2]; QI
+3,0xEE,5,FMemStVarUnkFunc,%a %2,1,0,0,0,0,4,store_mem,0x6610F785,Pop IUnknown(func); store Variant at [this+%2]; QI
+3,0xEF,5,FMemStAdFunc,%a %2,1,0,0,0,0,4,store_mem,0x6610A110,Pop COM ptr(func); store to [this+%2]; Release old
+3,0xF0,5,FMemStVarCopy,%a %2,4,0,0,0,0,16,store_mem,0x6610A1DC,Pop 4 Variant; VarCopy to [this+%2]
+3,0xF1,5,FMemStStrCopy,%a %2,1,0,0,0,0,4,store_mem,0x6610A0A0,Pop BSTR; __vbaStrCopy to [this+%2]
+3,0xF2,3,CastAd,%c,1,1,0,0,0,0,convert,0x6610A128,Pop ptr; cast/validate COM interface; push validated ptr; %c=import
+3,0xF3,3,CastAdVar,%c,4,1,0,0,0,0,convert,0x66109E8B,Pop 16B Variant; extract+cast COM interface; push ptr
+3,0xF4,3,New,%c,0,1,0,0,0,0,stack,0x66109E25,Create new COM object; %c=class import; push ptr
+3,0xF5,3,NewIfNullRf,%c,1,1,0,0,0,0,stack,0x6610F1A8,Pop ref; if null create new instance; push (non-null) ref
+3,0xF6,3,NewIfNullAd,%c,1,1,0,0,0,0,stack,0x6610A160,Pop ptr; if null create new; push (non-null) ptr
+3,0xF7,3,NewIfNullPr,%c,1,1,0,0,0,0,stack,0x6610A158,Pop COM ptr; if null create new; push (non-null) ptr
+3,0xF8,3,CVarBoolI2,%a,1,0,0,0,0,16,convert,0x661091A3,Pop i32(bool as i16); write Variant(vbBoolean) to [EBP+sext(op)]
+3,0xF9,3,CVarDateVar,%a,4,0,0,0,0,16,convert,0x6610D8FB,Pop 4 Variant slots; extract Date; write Variant(vbDate) to frame
+3,0xFA,3,CVarErrI4,%a,1,0,0,0,0,16,convert,0x6610D8BF,Pop i32 error code; write Variant(vbError) to [EBP+sext(op)]
+3,0xFB,3,CVarDate,%a,0,0,1,0,0,16,convert,0x6610D8F1,Pop FPU R8 Date; write Variant(vbDate) to [EBP+sext(op)]
+3,0xFC,3,CVarAryVarg,%a,1,0,0,0,0,16,convert,0x6610DA49,Pop array ptr; write Variant(vbArray) to [EBP+sext(op)]
+3,0xFD,1,CStrVarTmp,,4,1,0,0,0,0,convert,0x6610A2C8,Pop 16B Variant; convert to BSTR; push ptr; free Variant
+3,0xFE,3,CStrVarVal,%s,4,1,0,0,0,0,convert,0x661090E8,Pop 16B Variant; convert to BSTR via val semantics; push ptr
+3,0xFF,5,DestructOFrame,%a %2,-1,0,0,0,0,0,stack,0x66110206,Destruct object frame; cleanup With/For refs; %a %2 operands
+4,0x00,3,ThisVCallUI1,%2,-1,1,0,0,0,0,call,0x6610FEA3,This vtable call returning UI1; pops args; push u8 as i32
+4,0x01,3,ThisVCallI2,%2,-1,1,0,0,0,0,call,0x6610A4D0,This vtable call returning I2/Ad; pops args; push i32 (ThisVCallAd handler)
+4,0x02,3,ThisVCallI2,%2,-1,1,0,0,0,0,call,0x6610A4D0,This vtable call (duplicate); same handler
+4,0x03,3,ThisVCallR4,%2,-1,1,0,0,0,0,call,0x6610FDB9,This vtable call returning R4; pops args; push R4
+4,0x04,3,ThisVCallR8,%2,-1,2,0,0,0,0,call,0x6610FE0C,This vtable call returning R8; pops args; push 2 slots
+4,0x05,3,ThisVCallCy,%2,-1,2,0,0,0,0,call,0x6610FD74,This vtable call returning Cy; pops args; push 2 slots
+4,0x06,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x07,3,ThisVCallI2,%2,-1,1,0,0,0,0,call,0x6610A4D0,This vtable call (duplicate); same handler
+4,0x08,3,ThisVCallI2,%2,-1,1,0,0,0,0,call,0x6610A4D0,This vtable call (duplicate); same handler
+4,0x09,3,ThisVCallHidden,%2,-1,0,0,0,0,0,call,0x6610A4B0,This vtable call; hidden/void return; pops args (ThisVCall handler)
+4,0x0A,3,ThisVCallHidden,%2,-1,0,0,0,0,0,call,0x6610A4B0,This vtable call hidden (duplicate); same handler
+4,0x0B,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x0C,3,ThisVCallHidden,%2,-1,0,0,0,0,0,call,0x6610A4B0,This vtable call hidden (duplicate); same handler
+4,0x0D,5,ThisVCallCbFrame,%a %2,-1,0,0,0,0,0,call,0x6610FD35,This vtable call with callback frame; %a %2 operands
+4,0x0E,3,StLsetFixStr,%c,1,0,0,0,0,4,store_frame,0x6610A278,LSet fixed-length string; pop BSTR; store to %c import
+4,0x0F,3,StFixedStrFree,%c,1,0,0,0,0,4,store_frame,0x6610F4BB,Store fixed-length string and free old; pop BSTR; %c import
+4,0x10,3,VCallUI1,%2,-1,1,0,0,0,0,call,0x6610FFAD,Vtable call returning UI1; pops this+args; push u8 as i32
+4,0x11,3,VCallStr,%2,-1,1,0,0,0,0,call,0x6610A44C,Vtable call returning Str/Ad; pops this+args; push 4B (VCallAd handler)
+4,0x12,3,VCallStr,%2,-1,1,0,0,0,0,call,0x6610A44C,Vtable call (duplicate); same handler
+4,0x13,3,VCallR4,%2,-1,1,0,0,0,0,call,0x6610FF9D,Vtable call returning R4; pops this+args; push R4
+4,0x14,3,VCallR8,%2,-1,2,0,0,0,0,call,0x6610FFA5,Vtable call returning R8; pops this+args; push 2 slots
+4,0x15,3,VCallCy,%2,-1,2,0,0,0,0,call,0x6610FF95,Vtable call returning Cy; pops this+args; push 2 slots
+4,0x16,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x17,3,VCallStr,%2,-1,1,0,0,0,0,call,0x6610A44C,Vtable call (duplicate); same handler
+4,0x18,3,VCallStr,%2,-1,1,0,0,0,0,call,0x6610A44C,Vtable call (duplicate); same handler
+4,0x19,3,VCallFPR8,%2,-1,0,0,1,0,0,call,0x6610A460,Vtable call returning R8 on FPU; pops this+args; push FPU
+4,0x1A,3,VCallFPR8,%2,-1,0,0,1,0,0,call,0x6610A460,Vtable call FPR8 (duplicate); same handler
+4,0x1B,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x1C,3,VCallFPR8,%2,-1,0,0,1,0,0,call,0x6610A460,Vtable call FPR8 (duplicate); same handler
+4,0x1D,5,VCallCbFrame,%2 %2,-1,0,0,0,0,0,call,0x6610FF8D,Vtable call with callback frame; %2 %2 operands
+4,0x1E,3,StFixedStrR,%c,1,0,0,0,0,4,store_frame,0x6610F4A3,Store R-value fixed-length string; pop BSTR; %c import
+4,0x1F,3,StFixedStrRFree,%c,1,0,0,0,0,4,store_frame,0x6610F48B,Store R-value fixed str and free old; pop BSTR; %c import
+4,0x20,5,ImpAdCallUI1,%c %c,-1,1,0,0,0,0,call,0x6610FCDC,Import address call returning UI1; %c %c; push u8 as i32
+4,0x21,5,ImpAdCallI4,%c %c,-1,1,0,0,0,0,call,0x6610A47C,Import address call returning I4/Ad; %c %c; push i32
+4,0x22,5,ImpAdCallI4,%c %c,-1,1,0,0,0,0,call,0x6610A47C,Import addr call (duplicate); same handler
+4,0x23,5,ImpAdCallR4,%c %c,-1,1,0,0,0,0,call,0x6610FB93,Import address call returning R4; %c %c; push R4
+4,0x24,5,ImpAdCallR8,%c %c,-1,2,0,0,0,0,call,0x6610FBF5,Import address call returning R8; %c %c; push 2 slots
+4,0x25,5,ImpAdCallCy,%c %c,-1,2,0,0,0,0,call,0x6610A48C,Import address call returning Cy; %c %c; push 2 slots
+4,0x26,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x27,5,ImpAdCallI4,%c %c,-1,1,0,0,0,0,call,0x6610A47C,Import addr call (duplicate); same handler
+4,0x28,5,ImpAdCallI4,%c %c,-1,1,0,0,0,0,call,0x6610A47C,Import addr call (duplicate); same handler
+4,0x29,5,ImpAdCallFPR4,%c %c,-1,0,0,1,0,0,call,0x6610A490,Import address call returning FPR4; %c %c; push FPU
+4,0x2A,5,ImpAdCallFPR4,%c %c,-1,0,0,1,0,0,call,0x6610A490,Import addr call FPR4 (duplicate); same handler
+4,0x2B,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x2C,5,ImpAdCallFPR4,%c %c,-1,0,0,1,0,0,call,0x6610A490,Import addr call FPR4 (duplicate); same handler
+4,0x2D,9,ImpAdCallCbFrame,%a %4 %2,-1,0,0,0,0,0,call,0x6610FADF,Import addr call with callback frame; %a %4 %2 operands
+4,0x2E,3,LdStkRf,%2,0,1,0,0,4,0,stack,0x6611010C,Load stack reference; push addr of stack slot at %2 offset
+4,0x2F,3,LdFrameRf,%a,0,1,0,0,4,0,load_frame,0x66110121,Load frame reference; push addr of [EBP+sext(op)]; %a=frame offset
+4,0x30,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x31,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x32,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x33,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x34,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x35,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x36,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x37,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x38,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x39,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x3A,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x3B,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x3C,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x3D,5,LitVarUI1,%a %2,0,0,0,0,0,16,load_lit,0x6610EBD5,Write UI1 literal as Variant(vbByte) to [EBP+%a]; %2=value
+4,0x3E,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x3F,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x40,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x41,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x42,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x43,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x44,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x45,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x46,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x47,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x48,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x49,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x4A,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x4B,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x4C,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x4D,1,SetVarVar,,4,0,0,0,0,16,store_ind,0x6610F7C1,Pop 4 Variant slots; Set obj ref in target Variant
+4,0x4E,1,SetVarVarFunc,,4,0,0,0,0,16,store_ind,0x6610F7AE,Pop 4 Variant (func return); Set obj ref in target Variant
+4,0x4F,5,ImpAdCallHresult,%c %c,-1,0,0,0,0,0,call,0x6610A47C,Import address call returning HRESULT; %c %c; checked; no push
+4,0x50,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x51,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x52,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x53,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x54,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x55,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x56,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x57,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x58,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x59,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x5A,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x5B,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x5C,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x5D,3,OpenFile,%2,-1,0,0,0,0,0,io,0x6610933B,Open file; %2=mode+access; pops path+filenum+reclen from stack
+4,0x5E,3,LockFile,%2,-1,0,0,0,0,0,io,0x6610DE82,Lock/Unlock file region; %2=lock/unlock flag; pops filenum+start+len
+4,0x5F,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x60,3,EraseDestruct,%s,1,0,0,0,0,0,stack,0x6610D253,Erase array with destructor; %s=type desc; pop array ref
+4,0x61,3,LdFixedStr,%c,0,1,0,0,4,0,load_frame,0x6610A118,Load fixed-length string address from frame; push ptr; %c=import
+4,0x62,5,ForUI1,%a %2,2,0,0,0,0,1,branch,0x6610DF82,For counter=start To end (UI1); pop start+end; init loop; %a %2
+4,0x63,5,ForI2,%a %2,2,0,0,0,0,2,branch,0x661094CA,For counter=start To end (I2); pop start+end; init loop; %a %2
+4,0x64,5,ForI4,%a %2,2,0,0,0,0,4,branch,0x6610959D,For counter=start To end (I4); pop start+end; init loop; %a %2
+4,0x65,5,ForR4,%a %2,0,0,2,0,0,4,branch,0x6610E01D,For (R4); pop FPU start+end; init loop; %a %2
+4,0x66,5,ForR8,%a %2,0,0,2,0,0,8,branch,0x6610E08B,For (R8); pop FPU start+end; init loop; %a %2
+4,0x67,5,ForCy,%a %2,4,0,0,0,0,8,branch,0x6610E0CB,For (Cy); pop start+end (4 slots); init loop; %a %2
+4,0x68,5,ForVar,%a %2,8,0,0,0,0,16,branch,0x66109605,For (Variant); pop start+end (8 slots); init loop; %a %2
+4,0x69,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x6A,5,ForStepUI1,%a %2,3,0,0,0,0,1,branch,0x6610DF86,For..Step (UI1); pop start+end+step; init loop; %a %2
+4,0x6B,5,ForStepI2,%a %2,3,0,0,0,0,2,branch,0x66109528,For..Step (I2); pop start+end+step; init loop; %a %2
+4,0x6C,5,ForStepI4,%a %2,3,0,0,0,0,4,branch,0x661095A1,For..Step (I4); pop start+end+step; init loop; %a %2
+4,0x6D,5,ForStepR4,%a %2,0,0,3,0,0,4,branch,0x6610E021,For..Step (R4); pop 3 FPU vals; init loop; %a %2
+4,0x6E,5,ForStepR8,%a %2,0,0,3,0,0,8,branch,0x6610E08F,For..Step (R8); pop 3 FPU vals; init loop; %a %2
+4,0x6F,5,ForStepCy,%a %2,6,0,0,0,0,8,branch,0x6610E0D3,For..Step (Cy); pop start+end+step (6 slots); init loop; %a %2
+4,0x70,5,ForStepVar,%a %2,12,0,0,0,0,16,branch,0x66109615,For..Step (Variant); pop start+end+step (12 slots); init loop
+4,0x71,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x72,5,ForEachCollVar,%a %2,1,0,0,0,0,16,branch,0x6610E3E9,For Each var In collection (Variant); pop coll; init iterator
+4,0x73,5,NextEachCollVar,%a %2,0,0,0,0,0,0,branch,0x6610E409,Next (For Each collection Variant); advance iterator or exit
+4,0x74,5,ForEachCollAd,%a %2,1,0,0,0,0,4,branch,0x66109713,For Each obj In collection (Ad); pop coll; init iterator
+4,0x75,5,NextEachCollAd,%a %2,0,0,0,0,0,0,branch,0x6610E410,Next (For Each collection Ad); advance iterator or exit
+4,0x76,7,ForEachAryVar,%a %s %l,1,0,0,0,0,16,branch,0x6610E427,For Each var In array (Variant); pop array; init; %a %s %l
+4,0x77,7,NextEachAryVar,%a %s %l,0,0,0,0,0,0,branch,0x6610E441,Next (For Each array Variant); advance or exit; %a %s %l
+4,0x78,5,NextUI1,%a %2,0,0,0,0,0,0,branch,0x6610DFB2,Next (For UI1); increment counter; compare; branch or fall through
+4,0x79,5,NextI2,%a %2,0,0,0,0,0,0,branch,0x661094CA,Next (For I2); increment+compare; branch or fall through
+4,0x7A,5,NextI4,%a %2,0,0,0,0,0,0,branch,0x6610959D,Next (For I4); increment+compare; branch or fall through
+4,0x7B,5,NextStepR4,%a %2,0,0,0,0,0,0,branch,0x6610E01D,Next Step (For R4); add step+compare; branch or fall through
+4,0x7C,5,NextR8,%a %2,0,0,0,0,0,0,branch,0x6610E08B,Next (For R8); add step+compare; branch or fall through
+4,0x7D,5,NextStepCy,%a %2,0,0,0,0,0,0,branch,0x6610E0CB,Next Step (For Cy); add step+compare; branch or fall through
+4,0x7E,5,NextStepVar,%a %2,0,0,0,0,0,0,branch,0x66109644,Next Step (For Variant); add step+compare; branch or fall through
+4,0x7F,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x80,5,NextStepUI1,%a %2,0,0,0,0,0,0,branch,0x6610DFB2,Next Step (For UI1); same handler as NextUI1
+4,0x81,5,NextStepI2,%a %2,0,0,0,0,0,0,branch,0x66109528,Next Step (For I2); add step+compare; branch or fall through
+4,0x82,5,NextStepI4,%a %2,0,0,0,0,0,0,branch,0x661095A1,Next Step (For I4); add step+compare; branch or fall through
+4,0x83,5,NextStepR4,%a %2,0,0,0,0,0,0,branch,0x6610E021,Next Step (For R4); same handler as 0x7B
+4,0x84,5,NextR8,%a %2,0,0,0,0,0,0,branch,0x6610E08F,Next Step (For R8); same handler as 0x7C
+4,0x85,5,NextStepCy,%a %2,0,0,0,0,0,0,branch,0x6610E0D3,Next Step (For Cy); same handler as 0x7D
+4,0x86,5,NextStepVar,%a %2,0,0,0,0,0,0,branch,0x66109644,Next Step (For Variant); same handler as 0x7E
+4,0x87,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x88,7,ForEachCollObj,%a %s %l,1,0,0,0,0,4,branch,0x66109725,For Each obj In collection (Object); pop coll; init; %a %s %l
+4,0x89,5,ForEachVar,%a %2,1,0,0,0,0,0,branch,0x6610E3E2,For Each (generic Variant); pop source; init iterator
+4,0x8A,5,ForEachVarFree,%a %2,1,0,0,0,0,0,branch,0x6610E3CB,For Each (generic Variant); pop source; init; free after
+4,0x8B,7,NextEachCollObj,%a %s %l,0,0,0,0,0,0,branch,0x66109741,Next (For Each collection Object); advance or exit; %a %s %l
+4,0x8C,9,NextEachVar,%a %4 %2,-1,0,0,0,0,0,branch,0x6610E3F0,Next (For Each generic); advance or exit; %a %4 %2
+4,0x8D,3,CheckType,%c,1,1,0,0,0,0,compare,0x66109ED1,TypeOf..Is check; pop obj ptr; check against %c type; push i32 bool
+4,0x8E,9,Redim,%a %4 %2,-1,0,0,0,0,0,stack,0x66108E7E,ReDim array; %a %4 %2 operands; pops dimensions from stack
+4,0x8F,9,RedimPreserve,%a %4 %2,-1,0,0,0,0,0,stack,0x6610D279,ReDim Preserve; %a %4 %2; pops dimensions; preserves data
+4,0x90,5,RedimVar,%a %2,-1,0,0,0,0,0,stack,0x6610D2D3,ReDim Variant array; %a %2; pops dimensions
+4,0x91,5,RedimPreserveVar,%a %2,-1,0,0,0,0,0,stack,0x6610D2A2,ReDim Preserve Variant array; %a %2; preserves data
+4,0x92,5,FDupVar,%a %2,0,4,0,0,16,0,load_frame,0x6610A1BB,Duplicate Variant from [EBP+%a] + %2; push copy as 4 slots
+4,0x93,5,FDupStr,%a %2,0,1,0,0,4,0,load_frame,0x6610F3D4,Duplicate String from [EBP+%a] + %2; SysAllocString; push BSTR
+4,0x94,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0x95,7,OnGosub,%a %4,1,0,0,0,0,0,branch,0x6610D315,On..GoSub; pop index; branch to table[index]; push return addr
+4,0x96,7,OnGoto,%a %4,1,0,0,0,0,0,branch,0x6610D348,On..GoTo; pop index; branch to table[index]
+4,0x97,1,AddRef,,1,1,0,0,0,0,stack,0x6610F982,Pop COM ptr; AddRef; push same ptr back (increment ref count)
+4,0x98,5,LateMemCall,%c %c,-1,0,0,0,0,0,call,0x661098FC,Late-bound member call via IDispatch::Invoke; %c %c
+4,0x99,5,LateMemLdVar,%a %2,-1,4,0,0,0,0,call,0x66109926,Late-bound member load; returns Variant; push 4 slots; %a %2
+4,0x9A,7,LateMemCallLdVar,%a %4,-1,4,0,0,0,0,call,0x6610990F,Late-bound member call+load; returns Variant; %a %4
+4,0x9B,3,LateMemSt,%c,-1,0,0,0,0,0,call,0x66109926,Late-bound member store via IDispatch; pops value+args; %c
+4,0x9C,5,LateMemCallSt,%c %c,-1,0,0,0,0,0,call,0x66109974,Late-bound member call+store; pops value+args; %c %c
+4,0x9D,5,LateMemStAd,%c %c,-1,0,0,0,0,0,call,0x66109963,Late-bound member Set store (obj ref); %c %c
+4,0x9E,5,ExitProcFrameCb,%a %2,0,0,0,0,0,0,return,0x66110055,Exit proc with frame callback cleanup; %a %2
+4,0x9F,5,ExitProcFrameCbStack,%a %2,0,0,0,0,0,0,return,0x6610FFD0,Exit proc with frame callback + stack cleanup; %a %2
+4,0xA0,7,LateIdCall,%a %4,-1,0,0,0,0,0,call,0x6610985A,Late-bound call by DispID; IDispatch::Invoke; %a %4
+4,0xA1,7,LateIdLdVar,%a %4,-1,4,0,0,0,0,call,0x66109893,Late-bound load by DispID; returns Variant; push 4 slots; %a %4
+4,0xA2,9,LateIdCallLdVar,%a %4 %2,-1,4,0,0,0,0,call,0x6610986C,Late-bound call+load by DispID; returns Variant; %a %4 %2
+4,0xA3,5,LateIdSt,%4,-1,0,0,0,0,0,call,0x66109893,Late-bound store by DispID; pops value; %4
+4,0xA4,7,LateIdCallSt,%a %4,-1,0,0,0,0,0,call,0x661098A6,Late-bound call+store by DispID; %a %4
+4,0xA5,7,LateIdStAd,%a %4,-1,0,0,0,0,0,call,0x66109893,Late-bound Set store by DispID (obj ref); %a %4
+4,0xA6,7,LateMemNamedCall,%a %4,-1,0,0,0,0,0,call,0x6610EAAD,Late-bound named-arg member call; %a %4
+4,0xA7,9,LateMemNamedCallLdVar,%a %4 %2,-1,4,0,0,0,0,call,0x6610EAE7,Late-bound named call+load; Variant return; %a %4 %2
+4,0xA8,7,LateMemNamedCallSt,%a %4,-1,0,0,0,0,0,call,0x6610EB05,Late-bound named call+store; %a %4
+4,0xA9,7,LateMemNamedStAd,%a %4,-1,0,0,0,0,0,call,0x6610EB33,Late-bound named Set store; %a %4
+4,0xAA,9,LateIdNamedCall,%a %4 %2,-1,0,0,0,0,0,call,0x6610E9AD,Late-bound named call by DispID; %a %4 %2
+4,0xAB,1,LateIdNamedCallLdVar,,-1,4,0,0,0,0,call,0x6610E9E5,Late-bound named call+load by DispID; Variant; push 4 slots
+4,0xAC,9,LateIdNamedCallSt,%a %4 %2,-1,0,0,0,0,0,call,0x6610EA02,Late-bound named call+store by DispID; %a %4 %2
+4,0xAD,9,LateIdNamedStAd,%a %4 %2,-1,0,0,0,0,0,call,0x6610EA2E,Late-bound named Set store by DispID; %a %4 %2
+4,0xAE,5,VarIndexLdVar,%a %2,-1,4,0,0,16,0,load_ind,0x66108DB5,Variant index load; pop index+Variant; push Variant result; %a %2
+4,0xAF,5,VarIndexLdRfVar,%a %2,-1,1,0,0,4,0,load_ind,0x6610D189,Variant index load ref; pop index+Variant; push addr; %a %2
+4,0xB0,3,VarIndexSt,%a,-1,0,0,0,0,16,store_ind,0x6610D196,Variant index store; pop value+index+Variant; %a
+4,0xB1,3,VarIndexStAd,%a,-1,0,0,0,0,4,store_ind,0x6610D1C1,Variant index Set store; pop obj+index+Variant; %a
+4,0xB2,-1,FFreeVar,,-1,0,0,0,0,0,stack,0x66108FA4,Free multiple Variants; variable-length; reads frame offsets
+4,0xB3,-1,FFreeStr,,-1,0,0,0,0,0,stack,0x66108FB8,Free multiple BSTRs; variable-length; reads frame offsets
+4,0xB4,-1,FFreeAd,,-1,0,0,0,0,0,stack,0x6610A118,Free multiple COM ptrs; variable-length; reads frame offsets
+4,0xB5,3,LitI2,%2,0,1,0,0,0,0,load_lit,0x66108FFB,Push i16 literal (sign-extended to i32); %2=value
+4,0xB6,3,LitI2FP,%2,0,0,0,1,0,0,load_lit,0x6610A011,Push i16 literal onto FPU as float; %2=value; fild
+4,0xB7,5,LitCy4,%4,0,2,0,0,0,0,load_lit,0x6610A011,Push 4B Currency literal (sign-extend to 8B); %4; push 2 slots
+4,0xB8,5,LitI4,%4,0,1,0,0,0,0,load_lit,0x66108F38,Push i32 literal; %4=value
+4,0xB9,5,LitI4,%4,0,1,0,0,0,0,load_lit,0x66108F38,Push i32 literal (duplicate); same handler
+4,0xBA,5,LitR4FP,%4,0,0,0,1,0,0,load_lit,0x6610A168,Push R4 literal onto FPU; %4=f32 bits; fld dword
+4,0xBB,9,LitR8,%4 %4,0,2,0,0,0,0,load_lit,0x6610A174,Push R8 literal (8 bytes); %4 %4; push 2 eval slots
+4,0xBC,9,LitR8,%4 %4,0,2,0,0,0,0,load_lit,0x6610A174,Push R8 literal (duplicate); same handler
+4,0xBD,9,LitR8FP,%4 %4,0,0,0,1,0,0,load_lit,0x66108F97,Push R8 literal onto FPU; %4 %4=f64 bits; fld qword
+4,0xBE,9,LitR8FP,%4 %4,0,0,0,1,0,0,load_lit,0x66108F97,Push R8 FPU literal (duplicate); same handler
+4,0xBF,3,LitStr,%s,0,1,0,0,0,0,load_lit,0x66108F07,Push BSTR from constant pool; %s=pool index
+4,0xC0,5,LitVarI2,%a %2,0,0,0,0,0,16,load_lit,0x6610A098,Write I2 literal as Variant(vbInteger) to [EBP+%a]; %2=value
+4,0xC1,7,LitVarI4,%a %4,0,0,0,0,0,16,load_lit,0x66109AEB,Write I4 literal as Variant(vbLong) to [EBP+%a]; %4=value
+4,0xC2,7,LitVarR4,%a %4,0,0,0,0,0,16,load_lit,0x6610EBEE,Write R4 literal as Variant(vbSingle) to [EBP+%a]; %4=bits
+4,0xC3,1,LitVarCy,,0,0,0,0,0,16,load_lit,0x6610EBF8,Write Cy literal as Variant(vbCurrency) to frame; 8B inline
+4,0xC4,11,LitVarR8,%a %4 %4,0,0,0,0,0,16,load_lit,0x66109B06,Write R8 literal as Variant(vbDouble) to [EBP+%a]; %4 %4
+4,0xC5,1,LitVarDate,,0,0,0,0,0,16,load_lit,0x6610EC02,Write Date literal as Variant(vbDate) to frame; 8B inline
+4,0xC6,5,LitVarStr,%a %2,0,0,0,0,0,16,load_lit,0x66108F22,Write String literal as Variant(vbString) to [EBP+%a]; %2=pool
+4,0xC7,1,CStrBool,,1,1,0,0,0,0,convert,0x6610D753,Bool→Str; pop VB bool; convert to "True"/"False" BSTR; push
+4,0xC8,1,CStrDate,,0,1,1,0,0,0,convert,0x6610D787,Date(FPU)→Str; pop FPU R8 date; convert to BSTR; push
+4,0xC9,1,CDateStr,,1,0,0,1,0,0,convert,0x6610D80C,Str→Date(FPU); pop BSTR; parse date; push FPU R8
+4,0xCA,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0xCB,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0xCC,1,FreeStrNoPop,,0,0,0,0,0,0,stack,0x6610F92C,Free BSTR on TOS without popping; TOS still valid after
+4,0xCD,1,FreeVarNoPop,,0,0,0,0,0,0,stack,0x6610F96E,Free Variant on TOS without popping; TOS cleared to Empty
+4,0xCE,1,FreeAdNoPop,,0,0,0,0,0,0,stack,0x6610F94D,Free COM ptr on TOS without popping; Release; TOS set to NULL
+4,0xCF,1,EraseNoPop,,0,0,0,0,0,0,stack,0x6610D215,Erase array TOS without popping; array descriptor cleared
+4,0xD0,3,WMemLdUI1,%2,0,1,0,0,1,0,load_mem,0x6610E6F5,With-block: load u8 from [With_obj+%2]; push i32
+4,0xD1,3,WMemLdI2,%2,0,1,0,0,2,0,load_mem,0x6610E70E,With-block: load i16 from [With_obj+%2]; push i32
+4,0xD2,3,WMemLdStr,%2,0,1,0,0,4,0,load_mem,0x6610E727,With-block: load i32/Str from [With_obj+%2]; push 4B
+4,0xD3,3,WMemLdStr,%2,0,1,0,0,4,0,load_mem,0x6610E727,With-block: load Str (duplicate slot); same handler
+4,0xD4,3,WMemLdCy,%2,0,2,0,0,8,0,load_mem,0x6610E73E,With-block: load 8B Cy from [With_obj+%2]; push 2 slots
+4,0xD5,3,WMemLdCy,%2,0,2,0,0,8,0,load_mem,0x6610E73E,With-block: load Cy (duplicate slot); same handler
+4,0xD6,3,WMemLdRfVar,%2,0,1,0,0,4,0,load_mem,0x6610E786,With-block: push addr of Variant at [With_obj+%2] (LEA)
+4,0xD7,3,WMemLdStr,%2,0,1,0,0,4,0,load_mem,0x6610E727,With-block: load Str (duplicate slot); same handler
+4,0xD8,3,WMemLdStr,%2,0,1,0,0,4,0,load_mem,0x6610E727,With-block: load Str (duplicate slot); same handler
+4,0xD9,3,WMemLdFPR4,%2,0,0,0,1,4,0,load_mem,0x6610E758,With-block: load f32 from [With_obj+%2] → FPU
+4,0xDA,3,WMemLdFPR8,%2,0,0,0,1,8,0,load_mem,0x6610E76F,With-block: load f64 from [With_obj+%2] → FPU
+4,0xDB,3,IWMemLdPr,%2,0,1,0,0,4,0,load_mem,0x6610F380,With-block: load COM ptr from [With_obj+%2]; AddRef; push
+4,0xDC,3,WMemLdRfVar,%2,0,1,0,0,4,0,load_mem,0x6610E786,With-block: push addr of Variant (duplicate); LEA
+4,0xDD,3,WMemLdVar,%2,0,4,0,0,16,0,load_mem,0x6610F322,With-block: load 16B Variant from [With_obj+%2]; push 4 slots
+4,0xDE,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0xDF,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0xE0,3,WMemStUI1,%2,1,0,0,0,0,1,store_mem,0x6610E79C,With-block: pop val; store u8 to [With_obj+%2]
+4,0xE1,3,WMemStI2,%2,1,0,0,0,0,2,store_mem,0x6610E7B4,With-block: pop val; store i16 to [With_obj+%2]
+4,0xE2,3,WMemStR4,%2,1,0,0,0,0,4,store_mem,0x6610E7CD,With-block: pop val; store R4/i32 to [With_obj+%2]
+4,0xE3,3,WMemStR4,%2,1,0,0,0,0,4,store_mem,0x6610E7CD,With-block: store R4 (duplicate slot); same handler
+4,0xE4,3,WMemStR8,%2,2,0,0,0,0,8,store_mem,0x6610E7E4,With-block: pop 2 slots; store R8 to [With_obj+%2]
+4,0xE5,3,WMemStR8,%2,2,0,0,0,0,8,store_mem,0x6610E7E4,With-block: store R8 (duplicate slot); same handler
+4,0xE6,3,WMemStVar,%2,4,0,0,0,0,16,store_mem,0x6610F879,With-block: pop 4 Variant; store 16B to [With_obj+%2]
+4,0xE7,3,WMemStStr,%2,1,0,0,0,0,4,store_mem,0x6610F3F9,With-block: pop BSTR; store to [With_obj+%2]; SysFreeString old
+4,0xE8,3,WMemStAd,%a,1,0,0,0,0,4,store_mem,0x6610F51E,With-block: pop COM ptr; store to [With_obj+%a]; Release old
+4,0xE9,3,WMemStFPR4,%2,0,0,1,0,0,4,store_mem,0x6610E7FE,With-block: pop FPU ST0; store f32 to [With_obj+%2]
+4,0xEA,3,WMemStFPR8,%2,0,0,1,0,0,8,store_mem,0x6610E81F,With-block: pop FPU ST0; store f64 to [With_obj+%2]
+4,0xEB,3,WMemStVarAd,%a,1,0,0,0,0,4,store_mem,0x6610F5CB,With-block: pop COM ptr; Set Variant at [With_obj+%a]
+4,0xEC,3,WMemStVarAdFunc,%a,1,0,0,0,0,4,store_mem,0x6610F5B8,With-block: pop COM ptr(func); Set Variant at [With_obj+%a]
+4,0xED,3,WMemStVarUnk,%a,1,0,0,0,0,4,store_mem,0x6610F781,With-block: pop IUnknown; store to Variant at [With_obj+%a]; QI
+4,0xEE,3,WMemStVarUnkFunc,%a,1,0,0,0,0,4,store_mem,0x6610F76A,With-block: pop IUnknown(func); store Variant; QI
+4,0xEF,3,WMemStAdFunc,%a,1,0,0,0,0,4,store_mem,0x6610F50B,With-block: pop COM ptr(func); store to [With_obj+%a]; Release
+4,0xF0,3,WMemStVarCopy,%2,4,0,0,0,0,16,store_mem,0x6610F810,With-block: pop 4 Variant; VarCopy to [With_obj+%2]
+4,0xF1,3,WMemStStrCopy,%2,1,0,0,0,0,4,store_mem,0x6610F419,With-block: pop BSTR; __vbaStrCopy to [With_obj+%2]
+4,0xF2,7,VarIndexLdRfVarLock,%a %4,-1,1,0,0,4,0,load_ind,0x6610D162,Variant index load ref+lock; push addr; %a %4
+4,0xF3,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0xF4,1,InvalidExcode,,0,0,0,0,0,0,,,
+4,0xF5,3,AssignRecord,%s,2,0,0,0,0,0,stack,0x6611024E,Assign UDT record; pop src+dst ptrs; memcpy; %s=type desc
+4,0xF6,5,DestructAnsiOFrame,%a %2,-1,0,0,0,0,0,stack,0x6611022A,Destruct ANSI object frame; cleanup With/For; %a %2
+4,0xF7,3,FStVarZero,%a,0,0,0,0,0,16,store_frame,0x6610F7D4,Clear Variant at [EBP+sext(op)] to zero/Empty
+4,0xF8,3,FStVarCopyObj,%a,4,0,0,0,0,16,store_frame,0x6610A218,Pop 4 Variant (obj); copy with Set semantics to [EBP+%a]
+4,0xF9,1,VerifyVarObj,,4,4,0,0,0,0,stack,0x66109472,Verify Variant contains Object; pop 16B; validate; push back
+4,0xFA,1,VerifyPVarObj,,1,1,0,0,0,0,stack,0x6610DF3D,Verify ptr-to-Variant contains Object; pop addr; validate; push
+4,0xFB,1,FnInStrB4,,4,1,0,0,0,0,stack,0x6611054D,InStrB (4-arg byte); pop start+str1+str2+compare; push i32 pos
+4,0xFC,3,FnInStrB4Var,%a,4,0,0,0,0,16,stack,0x6611055F,InStrB (4-arg byte) → Variant; pop args; write Variant to %a
+4,0xFD,1,FnInStr4,,4,1,0,0,0,0,stack,0x6610A902,InStr (4-arg); pop start+str1+str2+compare; push i32 position
+4,0xFE,3,FnInStr4Var,%a,4,0,0,0,0,16,stack,0x6611057A,InStr (4-arg) → Variant; pop args; write Variant to %a frame
+4,0xFF,1,FnStrComp3,,3,1,0,0,0,0,stack,0x66110595,StrComp (3-arg); pop str1+str2+compare; push i32 result
+5,0x00,3,FnStrComp3Var,%a,3,0,0,0,0,16,stack,0x661105A7,StrComp (3-arg) → Variant; pop str1+str2+compare; write Variant to %a
+5,0x01,1,StAryMove,,2,0,0,0,0,0,store_ind,0x66108DE1,Move array; pop src+dst array refs; transfer ownership
+5,0x02,1,StAryCopy,,2,0,0,0,0,0,store_ind,0x6610D1C8,Copy array; pop src+dst array refs; deep copy
+5,0x03,3,StAryRecMove,%s,2,0,0,0,0,0,store_ind,0x6610D1F7,Move record array; pop src+dst; %s=type desc; transfer
+5,0x04,3,StAryRecCopy,%s,2,0,0,0,0,0,store_ind,0x6610D1D9,Copy record array; pop src+dst; %s=type desc; deep copy
+5,0x05,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x06,5,AryInRecLdPr,%a %2,2,1,0,0,4,0,load_ind,0x6610D12C,Load COM ptr from array in UDT; %a %2; AddRef; push
+5,0x07,5,AryInRecLdRf,%a %2,2,1,0,0,4,0,load_ind,0x6610D0FD,Load addr from array in UDT; %a %2; push (LEA)
+5,0x08,1,CExtInstUnk,,1,1,0,0,0,0,convert,0x6610F1EC,Convert external instance to IUnknown; pop ptr; QI; push
+5,0x09,3,IStVarCopyObj,%a,4,0,0,0,0,16,store_ind,0x6610F855,Pop 4 Variant; copy with obj ref semantics to *[EBP+%a]
+5,0x0A,1,ArrayRebase1Var,,1,0,0,0,0,0,stack,0x6610D303,Rebase 1-D array to base 1; pop array ref; modify lBound
+5,0x0B,1,Assert,,1,0,0,0,0,0,stack,0x6610CF32,Debug.Assert; pop bool; break if False; no-op in release
+5,0x0C,7,RaiseEvent,%a %4,-1,0,0,0,0,0,call,0x6610E990,RaiseEvent; %a %4; pop args; invoke event sink handlers
+5,0x0D,5,PrintObject,%c %2,-1,0,0,0,0,0,io,0x6610A347,Print to object (Debug.Print); %c %2; pop value+channel
+5,0x0E,5,PrintFile,%c %2,-1,0,0,0,0,0,io,0x6610A36B,Print# to file; %c %2; pop value+filenum
+5,0x0F,5,WriteFile,%c %2,-1,0,0,0,0,0,io,0x6610FA43,Write# to file; %c %2; pop value+filenum
+5,0x10,5,InputFile,%c %2,-1,0,0,0,0,0,io,0x6610DCF6,Input# from file; %c %2; pop filenum; read values
+5,0x11,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x12,1,GetRecFxStr3,,3,0,0,0,0,0,io,0x6610DDCA,Get with fixed string (3-arg); pop filenum+recnum+buffer
+5,0x13,1,GetRecFxStr4,,4,0,0,0,0,0,io,0x6610DDEC,Get with fixed string (4-arg); pop filenum+recnum+buffer+len
+5,0x14,1,PutRecFxStr3,,3,0,0,0,0,0,io,0x6610DDDB,Put with fixed string (3-arg); pop filenum+recnum+buffer
+5,0x15,1,PutRecFxStr4,,4,0,0,0,0,0,io,0x6610DDFD,Put with fixed string (4-arg); pop filenum+recnum+buffer+len
+5,0x16,3,GetRecOwn3,%s,3,0,0,0,0,0,io,0x6610DE0E,Get with owner record (3-arg); %s=type desc
+5,0x17,3,GetRecOwn4,%s,4,0,0,0,0,0,io,0x6610DE2B,Get with owner record (4-arg); %s=type desc
+5,0x18,3,PutRecOwn3,%s,3,0,0,0,0,0,io,0x6610DE48,Put with owner record (3-arg); %s=type desc
+5,0x19,3,PutRecOwn4,%s,4,0,0,0,0,0,io,0x6610DE65,Put with owner record (4-arg); %s=type desc
+5,0x1A,2,LitI2_Byte,%1,0,1,0,0,0,0,load_lit,0x66108FFB,Push u8 literal zero-extended to i32; %1=byte value
+5,0x1B,1,CBoolVarNull,,4,1,0,0,0,0,convert,0x661090A5,Var→Bool (null-aware); pop 16B Variant; convert; push i32 bool
+5,0x1C,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Large BOS debug marker; %1=line offset
+5,0x1D,0,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x1E,5,ImpAdCallNonVirt,%a %2,-1,0,0,0,0,0,call,0x6610FA67,Import addr non-virtual call; %a %2; direct function call
+5,0x1F,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x20,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x21,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x22,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x23,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x24,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x25,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x26,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x27,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x28,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x29,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x2A,3,DestructRecord,%a,0,0,0,0,0,0,stack,0x661101E6,Destruct UDT record at [EBP+%a]; cleanup fields
+5,0x2B,3,VCallFPR8,%2,-1,0,0,1,0,0,call,0x6610A460,Vtable call returning R8 on FPU; pops this+args; push FPU
+5,0x2C,3,ThisVCallHidden,%2,-1,0,0,0,0,0,call,0x6610A4B0,This vtable call; hidden/void; pops args (ThisVCall handler)
+5,0x2D,1,ZeroRetVal,,0,0,0,0,0,4,store_frame,0x6610A675,Zero the function return value slot; no stack change
+5,0x2E,1,ZeroRetValVar,,0,0,0,0,0,16,store_frame,0x6611026B,Zero the Variant return value slot; no stack change
+5,0x2F,5,ExitProcCbHresult,%},0,0,0,0,0,0,return,0x6610A4F1,Exit proc callback with HRESULT; cleanup + return
+5,0x30,7,ExitProcFrameCbHresult,%a %4,0,0,0,0,0,0,return,0x66110076,Exit proc frame callback with HRESULT; %a %4 cleanup
+5,0x31,3,EraseDestrKeepData,%s,1,0,0,0,0,0,stack,0x6610D236,Erase array but keep data; destructor variant; %s=type desc
+5,0x32,5,CDargRefUdt,%a %2,0,4,0,0,0,0,convert,0x6610D9D2,Push Variant ByRef to UDT DARG; %a %2; 4 slots
+5,0x33,5,CVarRefUdt,%a %2,0,4,0,0,0,0,convert,0x6610D9A4,Push Variant ByRef to UDT; %a %2; 4 slots
+5,0x34,5,CVarUdt,%a %2,0,0,0,0,0,16,convert,0x6610D936,Convert UDT to Variant; write Variant(vbUserDefinedType) to frame; %a %2
+5,0x35,3,StUdtVar,%s,4,0,0,0,0,0,store_ind,0x6610D9FF,Pop 4 Variant (UDT); store to destination; %s=type desc
+5,0x36,3,StAryVar,%c,1,0,0,0,0,0,store_ind,0x6610DA1F,Store array to Variant; pop array ref; %c=type
+5,0x37,3,CopyBytesZero,%2,-1,0,0,0,0,0,stack,0x6610DB52,CopyBytes + zero source; %2=byte count
+5,0x38,5,FLdZeroAry,%a %2,0,1,0,0,0,0,load_lit,0x6610DED3,Push zero/empty array descriptor; %a %2
+5,0x39,3,FStVarZero,%a,0,0,0,0,0,16,store_frame,0x6610F7D4,Clear Variant at [EBP+sext(op)] to zero/Empty (Lead3 handler)
+5,0x3A,7,CVarAryUdt,%a %4,1,0,0,0,0,16,convert,0x6610D964,Pop UDT array ptr; write Variant(vbArray|vbUDT) to frame; %a %4
+5,0x3B,7,RedimVarUdt,%a %4,-1,0,0,0,0,0,stack,0x6610D2DA,ReDim Variant UDT array; %a %4; pops dimensions
+5,0x3C,7,RedimPreserveVarUdt,%a %4,-1,0,0,0,0,0,stack,0x6610D2FC,ReDim Preserve Variant UDT array; %a %4; pops dims
+5,0x3D,5,VarLateMemLdRfVar,%a %2,-1,1,0,0,4,0,call,0x6610999B,Late-bound member load ref from Variant; push addr; %a %2
+5,0x3E,7,VarLateMemCallLdRfVar,%a %4,-1,1,0,0,4,0,call,0x6610EA60,Late-bound member call+load ref from Variant; push addr; %a %4
+5,0x3F,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x40,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x41,5,VarLateMemLdVar,%a %2,-1,4,0,0,16,0,call,0x661099A2,Late-bound member load from Variant; push 4 Variant slots; %a %2
+5,0x42,7,VarLateMemCallLdVar,%a %4,-1,4,0,0,16,0,call,0x6610EA7A,Late-bound member call+load from Variant; push 4 slots; %a %4
+5,0x43,3,VarLateMemSt,%c,-1,0,0,0,0,0,call,0x661099ED,Late-bound member store to Variant; pops value; %c
+5,0x44,5,VarLateMemCallSt,%c %c,-1,0,0,0,0,0,call,0x6610EA97,Late-bound member call+store to Variant; pops value; %c %c
+5,0x45,5,VarLateMemStAd,%c %c,-1,0,0,0,0,0,call,0x6610EA81,Late-bound member Set store to Variant; pops obj ref; %c %c
+5,0x46,1,InvalidExcode,,0,0,0,0,0,0,,,
+5,0x47,0,Unknown,,0,0,0,0,0,0,,,
+5,0x48,0,Unknown,,0,0,0,0,0,0,,,
+5,0x49,0,Unknown,,0,0,0,0,0,0,,,
+5,0x4A,0,Unknown,,0,0,0,0,0,0,,,
+5,0x4B,0,Unknown,,0,0,0,0,0,0,,,
+5,0x4C,0,Unknown,,0,0,0,0,0,0,,,
+5,0x4D,0,Unknown,,0,0,0,0,0,0,,,
+5,0x4E,0,Unknown,,0,0,0,0,0,0,,,
+5,0x4F,0,Unknown,,0,0,0,0,0,0,,,
+5,0x50,0,Unknown,,0,0,0,0,0,0,,,
+5,0x51,0,Unknown,,0,0,0,0,0,0,,,
+5,0x52,0,Unknown,,0,0,0,0,0,0,,,
+5,0x53,0,Unknown,,0,0,0,0,0,0,,,
+5,0x54,0,Unknown,,0,0,0,0,0,0,,,
+5,0x55,0,Unknown,,0,0,0,0,0,0,,,
+5,0x56,0,Unknown,,0,0,0,0,0,0,,,
+5,0x57,0,Unknown,,0,0,0,0,0,0,,,
+5,0x58,0,Unknown,,0,0,0,0,0,0,,,
+5,0x59,0,Unknown,,0,0,0,0,0,0,,,
+5,0x5A,0,Unknown,,0,0,0,0,0,0,,,
+5,0x5B,0,Unknown,,0,0,0,0,0,0,,,
+5,0x5C,0,Unknown,,0,0,0,0,0,0,,,
+5,0x5D,0,Unknown,,0,0,0,0,0,0,,,
+5,0x5E,0,Unknown,,0,0,0,0,0,0,,,
+5,0x5F,0,Unknown,,0,0,0,0,0,0,,,
+5,0x60,0,Unknown,,0,0,0,0,0,0,,,
+5,0x61,0,Unknown,,0,0,0,0,0,0,,,
+5,0x62,0,Unknown,,0,0,0,0,0,0,,,
+5,0x63,0,Unknown,,0,0,0,0,0,0,,,
+5,0x64,0,Unknown,,0,0,0,0,0,0,,,
+5,0x65,0,Unknown,,0,0,0,0,0,0,,,
+5,0x66,0,Unknown,,0,0,0,0,0,0,,,
+5,0x67,0,Unknown,,0,0,0,0,0,0,,,
+5,0x68,0,Unknown,,0,0,0,0,0,0,,,
+5,0x69,0,Unknown,,0,0,0,0,0,0,,,
+5,0x6A,0,Unknown,,0,0,0,0,0,0,,,
+5,0x6B,0,Unknown,,0,0,0,0,0,0,,,
+5,0x6C,0,Unknown,,0,0,0,0,0,0,,,
+5,0x6D,0,Unknown,,0,0,0,0,0,0,,,
+5,0x6E,0,Unknown,,0,0,0,0,0,0,,,
+5,0x6F,0,Unknown,,0,0,0,0,0,0,,,
+5,0x70,0,Unknown,,0,0,0,0,0,0,,,
+5,0x71,0,Unknown,,0,0,0,0,0,0,,,
+5,0x72,0,Unknown,,0,0,0,0,0,0,,,
+5,0x73,0,Unknown,,0,0,0,0,0,0,,,
+5,0x74,0,Unknown,,0,0,0,0,0,0,,,
+5,0x75,0,Unknown,,0,0,0,0,0,0,,,
+5,0x76,0,Unknown,,0,0,0,0,0,0,,,
+5,0x77,0,Unknown,,0,0,0,0,0,0,,,
+5,0x78,0,Unknown,,0,0,0,0,0,0,,,
+5,0x79,0,Unknown,,0,0,0,0,0,0,,,
+5,0x7A,0,Unknown,,0,0,0,0,0,0,,,
+5,0x7B,0,Unknown,,0,0,0,0,0,0,,,
+5,0x7C,0,Unknown,,0,0,0,0,0,0,,,
+5,0x7D,0,Unknown,,0,0,0,0,0,0,,,
+5,0x7E,0,Unknown,,0,0,0,0,0,0,,,
+5,0x7F,0,Unknown,,0,0,0,0,0,0,,,
+5,0x80,0,Unknown,,0,0,0,0,0,0,,,
+5,0x81,0,Unknown,,0,0,0,0,0,0,,,
+5,0x82,0,Unknown,,0,0,0,0,0,0,,,
+5,0x83,0,Unknown,,0,0,0,0,0,0,,,
+5,0x84,0,Unknown,,0,0,0,0,0,0,,,
+5,0x85,0,Unknown,,0,0,0,0,0,0,,,
+5,0x86,0,Unknown,,0,0,0,0,0,0,,,
+5,0x87,0,Unknown,,0,0,0,0,0,0,,,
+5,0x88,0,Unknown,,0,0,0,0,0,0,,,
+5,0x89,0,Unknown,,0,0,0,0,0,0,,,
+5,0x8A,0,Unknown,,0,0,0,0,0,0,,,
+5,0x8B,0,Unknown,,0,0,0,0,0,0,,,
+5,0x8C,0,Unknown,,0,0,0,0,0,0,,,
+5,0x8D,0,Unknown,,0,0,0,0,0,0,,,
+5,0x8E,0,Unknown,,0,0,0,0,0,0,,,
+5,0x8F,0,Unknown,,0,0,0,0,0,0,,,
+5,0x90,0,Unknown,,0,0,0,0,0,0,,,
+5,0x91,0,Unknown,,0,0,0,0,0,0,,,
+5,0x92,0,Unknown,,0,0,0,0,0,0,,,
+5,0x93,0,Unknown,,0,0,0,0,0,0,,,
+5,0x94,0,Unknown,,0,0,0,0,0,0,,,
+5,0x95,0,Unknown,,0,0,0,0,0,0,,,
+5,0x96,0,Unknown,,0,0,0,0,0,0,,,
+5,0x97,0,Unknown,,0,0,0,0,0,0,,,
+5,0x98,0,Unknown,,0,0,0,0,0,0,,,
+5,0x99,0,Unknown,,0,0,0,0,0,0,,,
+5,0x9A,0,Unknown,,0,0,0,0,0,0,,,
+5,0x9B,0,Unknown,,0,0,0,0,0,0,,,
+5,0x9C,0,Unknown,,0,0,0,0,0,0,,,
+5,0x9D,0,Unknown,,0,0,0,0,0,0,,,
+5,0x9E,0,Unknown,,0,0,0,0,0,0,,,
+5,0x9F,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA0,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA1,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA2,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA3,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA4,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA5,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA6,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA7,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA8,0,Unknown,,0,0,0,0,0,0,,,
+5,0xA9,0,Unknown,,0,0,0,0,0,0,,,
+5,0xAA,0,Unknown,,0,0,0,0,0,0,,,
+5,0xAB,0,Unknown,,0,0,0,0,0,0,,,
+5,0xAC,0,Unknown,,0,0,0,0,0,0,,,
+5,0xAD,0,Unknown,,0,0,0,0,0,0,,,
+5,0xAE,0,Unknown,,0,0,0,0,0,0,,,
+5,0xAF,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB0,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB1,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB2,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB3,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB4,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB5,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB6,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB7,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB8,0,Unknown,,0,0,0,0,0,0,,,
+5,0xB9,0,Unknown,,0,0,0,0,0,0,,,
+5,0xBA,0,Unknown,,0,0,0,0,0,0,,,
+5,0xBB,0,Unknown,,0,0,0,0,0,0,,,
+5,0xBC,0,Unknown,,0,0,0,0,0,0,,,
+5,0xBD,0,Unknown,,0,0,0,0,0,0,,,
+5,0xBE,0,Unknown,,0,0,0,0,0,0,,,
+5,0xBF,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC0,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC1,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC2,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC3,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC4,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC5,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC6,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC7,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC8,0,Unknown,,0,0,0,0,0,0,,,
+5,0xC9,0,Unknown,,0,0,0,0,0,0,,,
+5,0xCA,0,Unknown,,0,0,0,0,0,0,,,
+5,0xCB,0,Unknown,,0,0,0,0,0,0,,,
+5,0xCC,0,Unknown,,0,0,0,0,0,0,,,
+5,0xCD,0,Unknown,,0,0,0,0,0,0,,,
+5,0xCE,0,Unknown,,0,0,0,0,0,0,,,
+5,0xCF,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD0,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD1,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD2,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD3,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD4,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD5,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD6,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD7,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD8,0,Unknown,,0,0,0,0,0,0,,,
+5,0xD9,0,Unknown,,0,0,0,0,0,0,,,
+5,0xDA,0,Unknown,,0,0,0,0,0,0,,,
+5,0xDB,0,Unknown,,0,0,0,0,0,0,,,
+5,0xDC,0,Unknown,,0,0,0,0,0,0,,,
+5,0xDD,0,Unknown,,0,0,0,0,0,0,,,
+5,0xDE,0,Unknown,,0,0,0,0,0,0,,,
+5,0xDF,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE0,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE1,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE2,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE3,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE4,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE5,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE6,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE7,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE8,0,Unknown,,0,0,0,0,0,0,,,
+5,0xE9,0,Unknown,,0,0,0,0,0,0,,,
+5,0xEA,0,Unknown,,0,0,0,0,0,0,,,
+5,0xEB,0,Unknown,,0,0,0,0,0,0,,,
+5,0xEC,0,Unknown,,0,0,0,0,0,0,,,
+5,0xED,0,Unknown,,0,0,0,0,0,0,,,
+5,0xEE,0,Unknown,,0,0,0,0,0,0,,,
+5,0xEF,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF0,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF1,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF2,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF3,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF4,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF5,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF6,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF7,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF8,0,Unknown,,0,0,0,0,0,0,,,
+5,0xF9,0,Unknown,,0,0,0,0,0,0,,,
+5,0xFA,0,Unknown,,0,0,0,0,0,0,,,
+5,0xFB,0,Unknown,,0,0,0,0,0,0,,,
+5,0xFC,0,Unknown,,0,0,0,0,0,0,,,
+5,0xFD,0,Unknown,,0,0,0,0,0,0,,,
+5,0xFE,0,Unknown,,0,0,0,0,0,0,,,
+5,0xFF,0,Unknown,,0,0,0,0,0,0,,,

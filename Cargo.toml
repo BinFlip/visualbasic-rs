@@ -1,0 +1,18 @@
+[package]
+name = "visualbasic"
+version = "0.1.0"
+edition = "2024"
+authors = ["Johann Kempter <admin@binflip.rs>"]
+rust-version = "1.85"
+description = "Parse and inspect Visual Basic 6 compiled binaries"
+license = "Apache-2.0"
+repository = "https://github.com/BinFlip/visualbasic-rs"
+readme = "README.md"
+keywords = ["vb6", "pcode", "parser", "reverse-engineering", "binary-analysis"]
+categories = ["parser-implementations"]
+
+[dependencies]
+goblin = "0.10.5"
+
+[dev-dependencies]
+proptest = "1.11.0"
