@@ -87,14 +87,17 @@ impl<'a, 'p> Iterator for MethodLinkIterator<'a, 'p> {
             return None;
         }
 
-        let ptr_va = self.table_va.wrapping_add(self.index * 4);
-        self.index += 1;
+        let ptr_va = self.table_va.wrapping_add(self.index.saturating_mul(4));
+        self.index = self.index.saturating_add(1);
 
         let ptr_data = match self.map.slice_from_va(ptr_va, 4) {
             Ok(d) => d,
             Err(e) => return Some(Err(e)),
         };
-        let thunk_va = read_u32_le(ptr_data, 0);
+        let thunk_va = match read_u32_le(ptr_data, 0) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
 
         // Read the JMP instruction (E9 rel32) + possible SUB from the thunk.
         // We read 13 bytes to cover both formats (5-byte JMP or 13-byte JMP+SUB).
@@ -109,10 +112,20 @@ impl<'a, 'p> Iterator for MethodLinkIterator<'a, 'p> {
             }
         };
 
-        let code_va = if thunk_data[0] == 0xE9 {
-            let rel32 =
-                i32::from_le_bytes([thunk_data[1], thunk_data[2], thunk_data[3], thunk_data[4]]);
-            (thunk_va as i64 + 5 + rel32 as i64) as u32
+        let code_va = if thunk_data.first().copied() == Some(0xE9) {
+            let rel_bytes: [u8; 4] = match thunk_data.get(1..5).and_then(|s| s.try_into().ok()) {
+                Some(b) => b,
+                None => {
+                    return Some(Err(Error::Truncated {
+                        needed: 5,
+                        available: thunk_data.len(),
+                    }));
+                }
+            };
+            let rel32 = i32::from_le_bytes(rel_bytes);
+            i64::from(thunk_va)
+                .wrapping_add(5)
+                .wrapping_add(i64::from(rel32)) as u32
         } else {
             // Not a JMP — the thunk VA IS the code VA
             thunk_va
@@ -121,12 +134,15 @@ impl<'a, 'p> Iterator for MethodLinkIterator<'a, 'p> {
         // Check for SUB [esp+4], imm32 after the JMP (bytes 5-12)
         // Pattern: 81 6C 24 04 xx xx 00 00
         let this_adjust = if thunk_data.len() >= 13
-            && thunk_data[5] == 0x81
-            && thunk_data[6] == 0x6C
-            && thunk_data[7] == 0x24
-            && thunk_data[8] == 0x04
+            && thunk_data.get(5).copied() == Some(0x81)
+            && thunk_data.get(6).copied() == Some(0x6C)
+            && thunk_data.get(7).copied() == Some(0x24)
+            && thunk_data.get(8).copied() == Some(0x04)
         {
-            Some(read_u32_le(thunk_data, 9))
+            match read_u32_le(thunk_data, 9) {
+                Ok(v) => Some(v),
+                Err(e) => return Some(Err(e)),
+            }
         } else {
             None
         };

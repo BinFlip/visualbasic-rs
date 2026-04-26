@@ -13,8 +13,17 @@ use crate::{
     error::Error,
     pcode::opcode::{self, OpcodeInfo},
     pcode::operand::{self, Operand},
+    pcode::semantics::PCodeDataType,
     util::read_u16_le,
 };
+
+/// Maximum sentinel raw length when an instruction's byte span exceeds `u8::MAX`.
+///
+/// VB6 instructions are at most a few dozen bytes, but variable-length
+/// payloads could in principle exceed 255. We saturate the [`Instruction::raw_len`]
+/// field rather than panic; the iterator's `pos` is the source of truth for stream
+/// progress, so this only affects the public-facing length field.
+const RAW_LEN_SATURATION: u8 = u8::MAX;
 
 /// A single decoded P-Code instruction.
 ///
@@ -35,6 +44,46 @@ pub struct Instruction {
     pub info: &'static OpcodeInfo,
     /// Decoded operands (up to 4). Unused slots are `None`.
     pub operands: [Option<Operand>; 4],
+}
+
+impl Instruction {
+    /// Returns the type the opcode imprints on its evaluation-stack result, if any.
+    ///
+    /// Mirrors the `data_type` field on the parent [`OpcodeInfo`] — for
+    /// example `LitI4` returns `Some(PCodeDataType::I4)`, `FStR8` returns
+    /// `Some(PCodeDataType::R8)`, control-flow / Nop / Stack opcodes return
+    /// `None`. Build-time-resolved from the opcode's mnemonic suffix; no
+    /// runtime string parsing.
+    ///
+    /// This is the type-level signal consumers should prefer over
+    /// pattern-matching on mnemonic strings (e.g., `mnemonic.ends_with("I4")`),
+    /// which is fragile across renamings and does not generalize across
+    /// the six dispatch tables.
+    #[inline]
+    pub fn data_type(&self) -> Option<PCodeDataType> {
+        self.info.data_type
+    }
+
+    /// Returns the inferred type of the operand at slot `index`, if any.
+    ///
+    /// Today this projects the parent opcode's
+    /// [`data_type`](Self::data_type) for every operand slot — VB6 P-Code
+    /// opcodes are monomorphic in their operand kinds (a `LitI4` always
+    /// produces `I4`, an `FStR8` always stores `R8`), so the per-operand
+    /// type equals the per-instruction type when one is defined. The
+    /// per-slot signature is preserved so future revisions can refine it
+    /// to per-operand types (for example, `Convert { from, to }` opcodes
+    /// where the source operand has a different type than the result).
+    ///
+    /// Returns `None` for out-of-range `index`, for empty operand slots,
+    /// and for opcodes whose [`OpcodeInfo::data_type`] is `None`
+    /// (control flow, stack manipulation, debug markers).
+    #[inline]
+    pub fn operand_type(&self, index: usize) -> Option<PCodeDataType> {
+        // Validate the slot exists and carries an operand.
+        let _ = self.operands.get(index)?.as_ref()?;
+        self.info.data_type
+    }
 }
 
 /// Streaming iterator over P-Code instructions.
@@ -98,12 +147,24 @@ impl Iterator for InstructionIterator<'_> {
         let start = self.pos;
 
         // Read first byte
-        let first_byte = self.bytes[self.pos];
-        self.pos += 1;
+        let Some(&first_byte) = self.bytes.get(self.pos) else {
+            return Some(Err(Error::UnexpectedEndOfPCode {
+                offset: self.pos,
+                needed: 1,
+            }));
+        };
+        self.pos = match self.pos.checked_add(1) {
+            Some(v) => v,
+            None => {
+                return Some(Err(Error::ArithmeticOverflow {
+                    context: "decoder pos advance after first byte",
+                }));
+            }
+        };
 
         // Determine if this is a lead byte
         let next_byte = if self.pos < self.limit {
-            Some(self.bytes[self.pos])
+            self.bytes.get(self.pos).copied()
         } else {
             None
         };
@@ -118,7 +179,14 @@ impl Iterator for InstructionIterator<'_> {
                     needed: 2,
                 }));
             }
-            self.pos += 1;
+            self.pos = match self.pos.checked_add(1) {
+                Some(v) => v,
+                None => {
+                    return Some(Err(Error::ArithmeticOverflow {
+                        context: "decoder pos advance after lead byte",
+                    }));
+                }
+            };
         }
 
         // Now decode the operands
@@ -126,23 +194,43 @@ impl Iterator for InstructionIterator<'_> {
 
         if info.is_variable_length() {
             // Variable-length instruction: read u16 byte count, then payload
-            if self.pos + 2 > self.limit {
+            let after_size = match self.pos.checked_add(2) {
+                Some(v) => v,
+                None => {
+                    return Some(Err(Error::ArithmeticOverflow {
+                        context: "decoder variable-length size offset",
+                    }));
+                }
+            };
+            if after_size > self.limit {
+                let needed = after_size.saturating_sub(start);
                 return Some(Err(Error::UnexpectedEndOfPCode {
                     offset: start,
-                    needed: self.pos - start + 2,
+                    needed,
                 }));
             }
-            let byte_count = read_u16_le(self.bytes, self.pos);
-            self.pos += 2;
+            let byte_count = match read_u16_le(self.bytes, self.pos) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            self.pos = after_size;
 
             // Validate and skip the payload
-            if self.pos + byte_count as usize > self.limit {
+            let payload_end = match self.pos.checked_add(byte_count as usize) {
+                Some(v) => v,
+                None => {
+                    return Some(Err(Error::ArithmeticOverflow {
+                        context: "decoder variable-length payload end",
+                    }));
+                }
+            };
+            if payload_end > self.limit {
                 return Some(Err(Error::InvalidVariableLengthSize {
                     opcode_name: info.mnemonic,
                     size: byte_count,
                 }));
             }
-            self.pos += byte_count as usize;
+            self.pos = payload_end;
 
             operands = [
                 Some(Operand::VariableLength { byte_count }),
@@ -167,8 +255,14 @@ impl Iterator for InstructionIterator<'_> {
             // the operand format is empty or incomplete. Many opcodes have
             // size > 1 but no documented operand format specifiers — we still
             // need to skip over their operand bytes to stay aligned.
-            let expected_end = start + (opcode_bytes_consumed - 1) + info.size as usize;
-            if self.pos < expected_end && expected_end <= self.limit {
+            let lead_extra = opcode_bytes_consumed.saturating_sub(1);
+            let expected_end = start
+                .checked_add(lead_extra)
+                .and_then(|v| v.checked_add(info.size as usize));
+            if let Some(expected_end) = expected_end
+                && self.pos < expected_end
+                && expected_end <= self.limit
+            {
                 self.pos = expected_end;
             }
         } else {
@@ -176,10 +270,11 @@ impl Iterator for InstructionIterator<'_> {
             operands = [None; 4];
         }
 
-        let raw_len = (self.pos - start) as u8;
+        let raw_len = u8::try_from(self.pos.saturating_sub(start)).unwrap_or(RAW_LEN_SATURATION);
+        let offset_u16 = u16::try_from(start).unwrap_or(u16::MAX);
 
         Some(Ok(Instruction {
-            offset: start as u16,
+            offset: offset_u16,
             raw_len,
             info,
             operands,
@@ -190,7 +285,7 @@ impl Iterator for InstructionIterator<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pcode::opcode::DispatchTable;
+    use crate::pcode::opcode::{DispatchTable, PRIMARY_TABLE};
 
     /// Collect all instructions from a byte stream, asserting no errors.
     fn decode_all(bytes: &[u8]) -> Vec<Instruction> {
@@ -350,6 +445,27 @@ mod tests {
     }
 
     #[test]
+    fn test_data_type_and_operand_type() {
+        // LitI4 — should report I4 as both instruction- and operand-type.
+        let insns = decode_all(&[0xF5, 0x78, 0x56, 0x34, 0x12]);
+        let insn = &insns[0];
+        assert_eq!(insn.data_type(), Some(PCodeDataType::I4));
+        assert_eq!(insn.operand_type(0), Some(PCodeDataType::I4));
+        // LitI2
+        let insns = decode_all(&[0xF3, 0x05, 0x00]);
+        let insn = &insns[0];
+        assert_eq!(insn.data_type(), Some(PCodeDataType::I2));
+        assert_eq!(insn.operand_type(0), Some(PCodeDataType::I2));
+        // ExitProc — Return semantics, no data type.
+        let insns = decode_all(&[0x14]);
+        let insn = &insns[0];
+        assert_eq!(insn.data_type(), None);
+        // Out-of-range and empty-slot handling.
+        assert_eq!(insn.operand_type(0), None);
+        assert_eq!(insn.operand_type(7), None);
+    }
+
+    #[test]
     fn test_position_tracking() {
         let bytes = [0x14, 0x14]; // Two ExitProc
         let mut iter = InstructionIterator::new(&bytes, bytes.len() as u16);
@@ -377,7 +493,6 @@ mod tests {
     #[test]
     fn test_decode_all_single_byte_primary_opcodes() {
         // Verify that every size-1 primary opcode decodes to exactly 1 byte
-        use crate::pcode::opcode::PRIMARY_TABLE;
         for i in 0..=0xFA_u8 {
             // Skip lead bytes 0xFB-0xFF
             let info = &PRIMARY_TABLE[i as usize];

@@ -5,7 +5,7 @@
 //! maps event slots to handler methods. The handler VAs point to either
 //! P-Code [`EventHandlerThunk`]s or native [`NativeEventThunk`]s.
 
-use core::fmt;
+use std::fmt;
 
 use crate::{addressmap::AddressMap, error::Error, util::read_u32_le};
 
@@ -52,35 +52,33 @@ impl EventHandlerThunk {
     /// `data` should start at the `mov eax, imm32` instruction (+0x00).
     /// Returns `None` if the byte pattern doesn't match the expected stub.
     pub fn parse_from_event_entry(data: &[u8], event_entry_va: u32) -> Option<Self> {
-        if data.len() < Self::SIZE {
+        let bytes: &[u8; Self::SIZE] = data.get(..Self::SIZE)?.try_into().ok()?;
+        if bytes[0] != 0xB8 {
             return None;
         }
-        if data[0] != 0xB8 {
+        let event_dispatch_id = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        if bytes[5] != 0x66 || bytes[6] != 0x3D {
             return None;
         }
-        let event_dispatch_id = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
-        if data[5] != 0x66 || data[6] != 0x3D {
+        if bytes[7] != 0x33 || bytes[8] != 0xC0 {
             return None;
         }
-        if data[7] != 0x33 || data[8] != 0xC0 {
+        if bytes[9] != 0xBA {
             return None;
         }
-        if data[9] != 0xBA {
+        let proc_dsc_info_va = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+        if bytes[14] != 0x68 {
             return None;
         }
-        let proc_dsc_info_va = u32::from_le_bytes([data[10], data[11], data[12], data[13]]);
-        if data[14] != 0x68 {
-            return None;
-        }
-        let return_handler_va = u32::from_le_bytes([data[15], data[16], data[17], data[18]]);
-        if data[19] != 0xC3 {
+        let return_handler_va = u32::from_le_bytes([bytes[15], bytes[16], bytes[17], bytes[18]]);
+        if bytes[19] != 0xC3 {
             return None;
         }
         Some(Self {
             event_dispatch_id,
             proc_dsc_info_va,
             return_handler_va,
-            method_entry_va: event_entry_va + Self::METHOD_ENTRY_OFFSET as u32,
+            method_entry_va: event_entry_va.wrapping_add(Self::METHOD_ENTRY_OFFSET as u32),
         })
     }
 
@@ -132,18 +130,18 @@ impl NativeEventThunk {
 
     /// Parses a native event thunk from the given bytes.
     pub fn parse(data: &[u8], thunk_va: u32) -> Option<Self> {
-        if data.len() < Self::SIZE {
+        let bytes: &[u8; Self::SIZE] = data.get(..Self::SIZE)?.try_into().ok()?;
+        if bytes[0..4] != [0x81, 0x6C, 0x24, 0x04] {
             return None;
         }
-        if data[0..4] != [0x81, 0x6C, 0x24, 0x04] {
+        let this_adjust = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        if bytes[8] != 0xE9 {
             return None;
         }
-        let this_adjust = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        if data[8] != 0xE9 {
-            return None;
-        }
-        let rel32 = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
-        let handler_va = (thunk_va as i64 + 13 + rel32 as i64) as u32;
+        let rel32 = i32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]);
+        let handler_va = thunk_va
+            .wrapping_add(Self::SIZE as u32)
+            .wrapping_add(rel32 as u32);
         Some(Self {
             this_adjust,
             handler_va,
@@ -182,13 +180,11 @@ impl IUnknownThunk {
     ///
     /// Returns `None` if the bytes don't start with `FF 25`.
     pub fn parse(data: &[u8]) -> Option<Self> {
-        if data.len() < Self::SIZE {
+        let bytes: &[u8; Self::SIZE] = data.get(..Self::SIZE)?.try_into().ok()?;
+        if bytes[0] != 0xFF || bytes[1] != 0x25 {
             return None;
         }
-        if data[0] != 0xFF || data[1] != 0x25 {
-            return None;
-        }
-        let iat_va = u32::from_le_bytes([data[2], data[3], data[4], data[5]]);
+        let iat_va = u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
         Some(Self { iat_va })
     }
 }
@@ -236,47 +232,46 @@ impl<'a> EventSinkVtable<'a> {
     ///
     /// `handler_count` is [`ControlInfo::event_handler_slots`](crate::vb::control::ControlInfo::event_handler_slots).
     pub fn parse(data: &'a [u8], handler_count: u16) -> Result<Self, Error> {
-        let total = Self::HEADER_SIZE + handler_count as usize * 4;
-        if data.len() < total {
-            return Err(Error::TooShort {
-                expected: total,
-                actual: data.len(),
-                context: "EventSinkVtable",
-            });
-        }
+        let entries_size = (handler_count as usize).saturating_mul(4);
+        let total = Self::HEADER_SIZE.saturating_add(entries_size);
+        let bytes = data.get(..total).ok_or(Error::TooShort {
+            expected: total,
+            actual: data.len(),
+            context: "EventSinkVtable",
+        })?;
         Ok(Self {
-            bytes: &data[..total],
+            bytes,
             handler_count,
         })
     }
 
     /// Back-pointer to this control's ControlInfo entry at +0x04.
     #[inline]
-    pub fn control_info_va(&self) -> u32 {
+    pub fn control_info_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
     /// Back-pointer to the parent ObjectInfo at +0x08.
     #[inline]
-    pub fn object_info_va(&self) -> u32 {
+    pub fn object_info_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
     /// VA of the EVENT_SINK_QueryInterface thunk at +0x0C.
     #[inline]
-    pub fn query_interface_va(&self) -> u32 {
+    pub fn query_interface_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
     /// VA of the EVENT_SINK_AddRef thunk at +0x10.
     #[inline]
-    pub fn add_ref_va(&self) -> u32 {
+    pub fn add_ref_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x10)
     }
 
     /// VA of the EVENT_SINK_Release thunk at +0x14.
     #[inline]
-    pub fn release_va(&self) -> u32 {
+    pub fn release_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x14)
     }
 
@@ -294,8 +289,8 @@ impl<'a> EventSinkVtable<'a> {
         if slot >= self.handler_count {
             return None;
         }
-        let offset = Self::HEADER_SIZE + slot as usize * 4;
-        Some(read_u32_le(self.bytes, offset))
+        let offset = Self::HEADER_SIZE.checked_add((slot as usize).checked_mul(4)?)?;
+        read_u32_le(self.bytes, offset).ok()
     }
 
     /// Resolves an event handler VA into a parsed [`EventHandlerThunk`].

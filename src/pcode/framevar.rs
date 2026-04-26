@@ -78,7 +78,7 @@ impl FrameResolver {
         };
 
         Self {
-            frame_size: proc_dsc.frame_size(),
+            frame_size: proc_dsc.frame_size().unwrap_or(0),
             param_names,
             arg_types,
         }
@@ -101,8 +101,11 @@ impl FrameResolver {
     /// ```
     pub fn resolve(&self, offset: i16) -> FrameVar {
         if offset >= 0x08 {
-            // Positive offset: function argument
-            let index = ((offset - 0x08) / 4) as u8;
+            // Positive offset: function argument. Use checked arithmetic to
+            // avoid panicking on absurd offsets like i16::MAX.
+            let arg_byte = i32::from(offset).saturating_sub(0x08);
+            let arg_index = arg_byte / 4;
+            let index = u8::try_from(arg_index).unwrap_or(u8::MAX);
             let name = self.param_names.get(index as usize).cloned();
             let arg_type = self.arg_types.get(index as usize).copied();
             return FrameVar::Argument {
@@ -121,12 +124,13 @@ impl FrameResolver {
             return FrameVar::Unknown { offset };
         }
 
-        // Negative offset: check housekeeping vs local
-        let abs_offset = (-(offset as i32)) as u32;
+        // Negative offset: check housekeeping vs local. Compute abs via i32 to
+        // avoid `-i16::MIN` overflow in plain `-(offset as i32)`.
+        let abs_offset = i32::from(offset).unsigned_abs();
 
         if abs_offset <= pcode_frame::HOUSEKEEPING_SIZE {
             // Runtime housekeeping slot
-            let name = match offset as i32 {
+            let name = match i32::from(offset) {
                 pcode_frame::PCODE_IP => "pcode_ip",
                 pcode_frame::CONST_POOL_VA => "const_pool_va",
                 pcode_frame::PROC_DSC_INFO => "proc_dsc_info",
@@ -145,7 +149,8 @@ impl FrameResolver {
         }
 
         // Local variable
-        let frame_offset = (abs_offset - pcode_frame::HOUSEKEEPING_SIZE) as u16;
+        let local_byte = abs_offset.saturating_sub(pcode_frame::HOUSEKEEPING_SIZE);
+        let frame_offset = u16::try_from(local_byte).unwrap_or(u16::MAX);
         if frame_offset <= self.frame_size {
             return FrameVar::Local { frame_offset };
         }

@@ -55,16 +55,12 @@ impl<'a> ProjectData<'a> {
     ///
     /// Returns [`Error::TooShort`] if `data.len() < 0x23C`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "ProjectData",
-            });
-        }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "ProjectData",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Returns the raw bytes of this structure.
@@ -76,20 +72,32 @@ impl<'a> ProjectData<'a> {
     /// Version number at offset 0x00.
     ///
     /// Expected value: `0x1F4` (500 decimal, meaning VB 5.00).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn version(&self) -> u32 {
+    pub fn version(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// Virtual address of the [`ObjectTable`](super::objecttable::ObjectTable) at offset 0x04.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn object_table_va(&self) -> u32 {
+    pub fn object_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
     /// Reserved field at offset 0x08 (always 0).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn null_08(&self) -> u32 {
+    pub fn null_08(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
@@ -97,20 +105,32 @@ impl<'a> ProjectData<'a> {
     ///
     /// For native binaries, this spans the compiled native code.
     /// For P-Code binaries, this is a tiny stub (e.g., 16 bytes).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn code_start_va(&self) -> u32 {
+    pub fn code_start_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
     /// End of the native/P-Code region in .text at offset 0x10.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn code_end_va(&self) -> u32 {
+    pub fn code_end_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x10)
     }
 
     /// Size of VB object structures in bytes at offset 0x14.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn data_size(&self) -> u32 {
+    pub fn data_size(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x14)
     }
 
@@ -119,8 +139,12 @@ impl<'a> ProjectData<'a> {
     /// For native binaries: always `lpNativeCode + 8`.
     /// For P-Code binaries: equals the .data section start.
     /// This is the base from which per-module variable storage is allocated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn thread_space_va(&self) -> u32 {
+    pub fn thread_space_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x18)
     }
 
@@ -128,8 +152,12 @@ impl<'a> ProjectData<'a> {
     ///
     /// Points to the `__vbaExceptHandler` import thunk (`jmp [imm32]`)
     /// in the .text section.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn vba_seh_va(&self) -> u32 {
+    pub fn vba_seh_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x1C)
     }
 
@@ -139,34 +167,54 @@ impl<'a> ProjectData<'a> {
     /// If non-zero, points to the start of the .data section where the
     /// VB runtime's native code data resides. Always 8 bytes before
     /// [`thread_space_va`](Self::thread_space_va) in native binaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn native_code_va(&self) -> u32 {
+    pub fn native_code_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x20)
     }
 
     /// Returns `true` if this binary contains P-Code (not native code).
     ///
     /// This is the definitive test: `lpNativeCode == 0` means P-Code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn is_pcode(&self) -> bool {
-        self.native_code_va() == 0
+    pub fn is_pcode(&self) -> Result<bool, Error> {
+        Ok(self.native_code_va()? == 0)
     }
 
     /// Path and ID string at offset 0x24 (528-byte fixed region).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn path_info(&self) -> &'a [u8] {
+    pub fn path_info(&self) -> Result<&'a [u8], Error> {
         read_fixed(self.bytes, 0x24, 528)
     }
 
     /// Virtual address of the external table at offset 0x234.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn external_table_va(&self) -> u32 {
+    pub fn external_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x234)
     }
 
     /// External object count at offset 0x238.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn external_count(&self) -> u32 {
+    pub fn external_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x238)
     }
 }
@@ -192,11 +240,11 @@ mod tests {
     fn test_parse_valid() {
         let data = make_project_data();
         let pd = ProjectData::parse(&data).unwrap();
-        assert_eq!(pd.version(), 0x1F4);
-        assert_eq!(pd.object_table_va(), 0x00402000);
-        assert!(pd.is_pcode());
-        assert_eq!(pd.native_code_va(), 0);
-        assert_eq!(pd.external_count(), 5);
+        assert_eq!(pd.version().unwrap(), 0x1F4);
+        assert_eq!(pd.object_table_va().unwrap(), 0x00402000);
+        assert!(pd.is_pcode().unwrap());
+        assert_eq!(pd.native_code_va().unwrap(), 0);
+        assert_eq!(pd.external_count().unwrap(), 5);
     }
 
     #[test]
@@ -204,8 +252,8 @@ mod tests {
         let mut data = make_project_data();
         data[0x20..0x24].copy_from_slice(&0x00401000u32.to_le_bytes());
         let pd = ProjectData::parse(&data).unwrap();
-        assert!(!pd.is_pcode());
-        assert_eq!(pd.native_code_va(), 0x00401000);
+        assert!(!pd.is_pcode().unwrap());
+        assert_eq!(pd.native_code_va().unwrap(), 0x00401000);
     }
 
     #[test]
@@ -221,14 +269,14 @@ mod tests {
     fn test_all_fields_accessible() {
         let data = make_project_data();
         let pd = ProjectData::parse(&data).unwrap();
-        let _ = pd.null_08();
-        let _ = pd.code_start_va();
-        let _ = pd.code_end_va();
-        let _ = pd.data_size();
-        let _ = pd.thread_space_va();
-        let _ = pd.vba_seh_va();
-        let _ = pd.path_info();
-        let _ = pd.external_table_va();
+        let _ = pd.null_08().unwrap();
+        let _ = pd.code_start_va().unwrap();
+        let _ = pd.code_end_va().unwrap();
+        let _ = pd.data_size().unwrap();
+        let _ = pd.thread_space_va().unwrap();
+        let _ = pd.vba_seh_va().unwrap();
+        let _ = pd.path_info().unwrap();
+        let _ = pd.external_table_va().unwrap();
         let _ = pd.as_bytes();
     }
 }

@@ -4,7 +4,12 @@
 //! implementations depending on whether the binary is P-Code or native
 //! compiled. [`MethodEntry`] classifies each slot.
 
-use crate::{addressmap::AddressMap, error::Error, project::PCodeMethod, util::read_u32_le};
+use crate::{
+    addressmap::AddressMap,
+    error::Error,
+    project::PCodeMethod,
+    util::{read_u16_le, read_u32_le},
+};
 
 /// Classification of a single entry in the method dispatch table.
 ///
@@ -59,9 +64,9 @@ impl<'a> MethodEntry<'a> {
         methods_va: u32,
         index: u16,
     ) -> Result<MethodEntry<'a>, Error> {
-        let entry_va = methods_va.wrapping_add(index as u32 * 4);
+        let entry_va = methods_va.wrapping_add(u32::from(index).wrapping_mul(4));
         let entry_data = map.slice_from_va(entry_va, 4)?;
-        let method_va = read_u32_le(entry_data, 0);
+        let method_va = read_u32_le(entry_data, 0)?;
 
         if method_va == 0 {
             return Ok(MethodEntry::Null);
@@ -77,8 +82,11 @@ impl<'a> MethodEntry<'a> {
         //   Pattern 3: Direct ProcDscInfo pointer (first dword is a valid in-PE VA
         //              pointing to ObjectInfo, and proc_size at +0x08 is non-zero)
         let stub_data = map.slice_from_va(method_va, 12)?;
-        let is_stub = stub_data[0] == 0xBA
-            || (stub_data[0] == 0x33 && stub_data[1] == 0xC0 && stub_data[2] == 0xBA);
+        let stub_head = stub_data.first_chunk::<3>().ok_or(Error::Truncated {
+            needed: 3,
+            available: stub_data.len(),
+        })?;
+        let is_stub = stub_head[0] == 0xBA || (stub_head == &[0x33, 0xC0, 0xBA]);
 
         if is_stub {
             let pcode = PCodeMethod::parse(map, methods_va, index)?;
@@ -87,8 +95,8 @@ impl<'a> MethodEntry<'a> {
 
         // Check for direct ProcDscInfo pointer: first dword is a valid proc_table VA,
         // and proc_size (u16 at +0x08) is non-zero.
-        let maybe_proc_table = read_u32_le(stub_data, 0);
-        let maybe_proc_size = u16::from_le_bytes([stub_data[8], stub_data[9]]);
+        let maybe_proc_table = read_u32_le(stub_data, 0)?;
+        let maybe_proc_size = read_u16_le(stub_data, 8)?;
         if map.is_va_in_image(maybe_proc_table) && maybe_proc_size > 0 && maybe_proc_size < 0x8000 {
             // Looks like a valid ProcDscInfo — try to parse as P-Code
             if let Ok(pcode) = PCodeMethod::parse(map, methods_va, index) {

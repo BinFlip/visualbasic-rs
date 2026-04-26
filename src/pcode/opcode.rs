@@ -132,7 +132,59 @@ impl OpcodeInfo {
             "Lead0" | "Lead1" | "Lead2" | "Lead3" | "Lead4"
         )
     }
+
+    /// Returns `true` if this opcode terminates the basic block.
+    ///
+    /// Includes returns ([`OpcodeSemantics::Return`]) and unconditional
+    /// branches ([`OpcodeSemantics::Branch`] with `conditional: false`).
+    /// Conditional branches **do not** terminate — control falls through
+    /// to the next instruction on the not-taken path.
+    ///
+    /// Useful for CFG construction and basic-block splitting.
+    #[inline]
+    pub fn is_terminator(&self) -> bool {
+        matches!(
+            self.semantics,
+            OpcodeSemantics::Return | OpcodeSemantics::Branch { conditional: false }
+        )
+    }
+
+    /// Returns `true` if this opcode is a call instruction.
+    ///
+    /// Matches any [`OpcodeSemantics::Call`] regardless of [`CallKind`]
+    /// (vtable, this-vtable, import-address, late-bound, or other).
+    /// Useful for CFG construction (calls split basic blocks in some
+    /// analyses) and call-graph extraction.
+    #[inline]
+    pub fn is_call(&self) -> bool {
+        matches!(self.semantics, OpcodeSemantics::Call { .. })
+    }
 }
+
+/// Sentinel returned by [`lookup`] when a lead byte's secondary opcode index
+/// somehow falls outside the 256-entry dispatch table.
+///
+/// Statically the cast `u8 as usize` cannot exceed 255 and the tables are
+/// `[OpcodeInfo; 256]`, so this fallback is unreachable at runtime — it
+/// exists to satisfy `clippy::indexing_slicing` without resorting to
+/// unchecked indexing in the generated code.
+pub static UNKNOWN_OPCODE: OpcodeInfo = OpcodeInfo {
+    table: DispatchTable::Primary,
+    index: 0,
+    size: 0,
+    mnemonic: "Unknown",
+    operand_format: "",
+    pops: 0,
+    pushes: 0,
+    fpu_pops: 0,
+    fpu_push: 0,
+    fpu_inplace: false,
+    mem_read: 0,
+    mem_write: 0,
+    category: "",
+    semantics: crate::pcode::semantics::OpcodeSemantics::Unclassified,
+    data_type: None,
+};
 
 // Include the build-time generated tables and lookup function.
 include!(concat!(env!("OUT_DIR"), "/opcode_generated.rs"));
@@ -286,6 +338,60 @@ mod tests {
     fn test_is_lead_byte() {
         assert!(PRIMARY_TABLE[0xFB].is_lead_byte());
         assert!(!PRIMARY_TABLE[0x14].is_lead_byte());
+    }
+
+    #[test]
+    fn test_is_terminator() {
+        // ExitProc (0x14) — Return semantics, terminates the block.
+        assert!(PRIMARY_TABLE[0x14].is_terminator());
+        // Branch (0x1E) — unconditional Branch{conditional:false}, terminates.
+        assert!(PRIMARY_TABLE[0x1E].is_terminator());
+        // BranchT (0x1C) — conditional, does NOT terminate (falls through).
+        assert!(!PRIMARY_TABLE[0x1C].is_terminator());
+        // BranchF (0x1D) — conditional, does NOT terminate.
+        assert!(!PRIMARY_TABLE[0x1D].is_terminator());
+        // AddI2 (0xA9) — arithmetic, not a terminator.
+        assert!(!PRIMARY_TABLE[0xA9].is_terminator());
+        // FLdRfVar (0x04) — load, not a terminator.
+        assert!(!PRIMARY_TABLE[0x04].is_terminator());
+    }
+
+    #[test]
+    fn test_is_call() {
+        // ImpAdCallI4 lives in Lead3 — find any Call-classified opcode.
+        let any_primary_call = PRIMARY_TABLE.iter().any(|o| o.is_call());
+        let any_lead3_call = LEAD3_TABLE.iter().any(|o| o.is_call());
+        // At least one of the primary or Lead3 tables must contain calls.
+        assert!(
+            any_primary_call || any_lead3_call,
+            "expected at least one Call opcode across primary+lead3 tables"
+        );
+        // ExitProc is not a call.
+        assert!(!PRIMARY_TABLE[0x14].is_call());
+        // AddI2 is not a call.
+        assert!(!PRIMARY_TABLE[0xA9].is_call());
+        // Branch is not a call.
+        assert!(!PRIMARY_TABLE[0x1E].is_call());
+    }
+
+    #[test]
+    fn test_terminator_and_call_are_disjoint() {
+        // No opcode should be both a terminator and a call.
+        let tables: [&[OpcodeInfo; 256]; 6] = [
+            &PRIMARY_TABLE,
+            &LEAD0_TABLE,
+            &LEAD1_TABLE,
+            &LEAD2_TABLE,
+            &LEAD3_TABLE,
+            &LEAD4_TABLE,
+        ];
+        for entry in tables.iter().flat_map(|t| t.iter()) {
+            assert!(
+                !(entry.is_terminator() && entry.is_call()),
+                "{} is both terminator and call",
+                entry.mnemonic
+            );
+        }
     }
 
     #[test]

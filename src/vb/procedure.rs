@@ -22,7 +22,7 @@
 //! followed by an error handler table whose size is given by `wErrTableSize`
 //! (+0x18). Total size = `wTotalSize` (+0x0A) = 0x18 + wErrTableSize.
 
-use core::fmt;
+use std::fmt;
 
 use crate::{
     error::Error,
@@ -66,18 +66,18 @@ impl<'a> CleanupTable<'a> {
         if data.len() < Self::HEADER_SIZE {
             return None;
         }
-        let size = read_u16_le(data, 0x00) as usize;
+        let size = read_u16_le(data, 0x00).ok()? as usize;
         if size < Self::HEADER_SIZE || size > data.len() {
             return None;
         }
         Some(Self {
-            bytes: &data[..size],
+            bytes: data.get(..size)?,
         })
     }
 
     /// Total table size in bytes (header + entries) at offset 0x00.
     #[inline]
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
@@ -86,7 +86,7 @@ impl<'a> CleanupTable<'a> {
     /// Used by `InitLocalCleanupEntries` as the iteration limit for
     /// entries requiring resource release.
     #[inline]
-    pub fn count(&self) -> u16 {
+    pub fn count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x04)
     }
 
@@ -95,7 +95,7 @@ impl<'a> CleanupTable<'a> {
     /// May exceed [`count`](Self::count) — entries beyond `count` exist
     /// in the table but are not actively processed for cleanup.
     #[inline]
-    pub fn total(&self) -> u16 {
+    pub fn total(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x06)
     }
 
@@ -104,14 +104,14 @@ impl<'a> CleanupTable<'a> {
     /// Bit 0 of byte +0x0B is checked by `InitLocalCleanupEntries` to
     /// skip the first entry when set.
     #[inline]
-    pub fn flags(&self) -> u32 {
+    pub fn flags(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
     /// Returns `true` if the table has any entries.
     #[inline]
     pub fn has_entries(&self) -> bool {
-        self.total() > 0
+        self.total().unwrap_or(0) > 0
     }
 
     /// Returns an iterator over the table's entries.
@@ -122,7 +122,11 @@ impl<'a> CleanupTable<'a> {
     /// data entries which use unsigned offsets.
     pub fn entries(&self) -> ControlPropertyIter<'a> {
         if self.bytes.len() > Self::HEADER_SIZE {
-            ControlPropertyIter::new(&self.bytes[Self::HEADER_SIZE..], self.total())
+            let total = self.total().unwrap_or(0);
+            match self.bytes.get(Self::HEADER_SIZE..) {
+                Some(rest) => ControlPropertyIter::new(rest, total),
+                None => ControlPropertyIter::new(&[], 0),
+            }
         } else {
             ControlPropertyIter::new(&[], 0)
         }
@@ -220,7 +224,7 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// Read the constant pool base via [`read_constants_va`]:
     /// ```ignore
-    /// let oi_data = map.slice_from_va(pdi.object_info_va(), OBJECT_INFO_MIN_SIZE)?;
+    /// let oi_data = map.slice_from_va(pdi.object_info_va()?, OBJECT_INFO_MIN_SIZE)?;
     /// let const_va = read_constants_va(oi_data);
     /// ```
     ///
@@ -228,7 +232,7 @@ impl<'a> ProcDscInfo<'a> {
     /// - [`ObjectInfo::constants_va`](super::object::ObjectInfo::constants_va) (+0x34)
     /// - [`ObjectInfo::object_table_va`](super::object::ObjectInfo::object_table_va) (+0x04)
     #[inline]
-    pub fn object_info_va(&self) -> u32 {
+    pub fn object_info_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
@@ -239,7 +243,7 @@ impl<'a> ProcDscInfo<'a> {
     /// - Value 0x10 (16) = 4 DWORDs (typical: `this` + 3 COM dispatch args)
     /// - Value 0x04 (4) = 1 DWORD (typical: just `this` pointer)
     #[inline]
-    pub fn arg_size(&self) -> u16 {
+    pub fn arg_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x04)
     }
 
@@ -247,7 +251,7 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// Confirmed by ProcCallEngine_Body: `sub esp, wFrameSize; memset(0)`.
     #[inline]
-    pub fn frame_size(&self) -> u16 {
+    pub fn frame_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x06)
     }
 
@@ -256,13 +260,13 @@ impl<'a> ProcDscInfo<'a> {
     /// The P-Code bytes are located at `[addr - offset .. addr]`
     /// where `addr` is the address of this ProcDscInfo structure.
     #[inline]
-    pub fn pcode_back_offset(&self) -> u16 {
+    pub fn pcode_back_offset(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x08)
     }
 
     /// Alias for [`pcode_back_offset`](Self::pcode_back_offset) (legacy name).
     #[inline]
-    pub fn proc_size(&self) -> u16 {
+    pub fn proc_size(&self) -> Result<u16, Error> {
         self.pcode_back_offset()
     }
 
@@ -271,7 +275,7 @@ impl<'a> ProcDscInfo<'a> {
     /// Equals `HEADER_SIZE (0x18) + wCleanupTableSize`. The structure is
     /// variable-length due to the local cleanup table.
     #[inline]
-    pub fn total_size(&self) -> u16 {
+    pub fn total_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x0A)
     }
 
@@ -284,31 +288,35 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// All other bits are unused/reserved.
     #[inline]
-    pub fn proc_opt_flags(&self) -> ProcOptFlags {
-        ProcOptFlags(read_u16_le(self.bytes, 0x0C))
+    pub fn proc_opt_flags(&self) -> Result<ProcOptFlags, Error> {
+        Ok(ProcOptFlags(read_u16_le(self.bytes, 0x0C)?))
     }
 
     /// Raw procedure option flags value at offset 0x0C.
     #[inline]
-    pub fn proc_opt_flags_raw(&self) -> u16 {
+    pub fn proc_opt_flags_raw(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x0C)
     }
 
     /// Returns `true` if this procedure has an `On Error` handler.
     #[inline]
     pub fn has_error_handler(&self) -> bool {
-        self.proc_opt_flags().has_error_handler()
+        self.proc_opt_flags()
+            .map(|f| f.has_error_handler())
+            .unwrap_or(false)
     }
 
     /// Returns `true` if this procedure uses `On Error Resume Next`.
     #[inline]
     pub fn has_resume_next(&self) -> bool {
-        self.proc_opt_flags().has_resume_next()
+        self.proc_opt_flags()
+            .map(|f| f.has_resume_next())
+            .unwrap_or(false)
     }
 
     /// Reserved field at offset 0x0E (not read by MSVBVM60.DLL runtime).
     #[inline]
-    pub fn reserved_0e(&self) -> u16 {
+    pub fn reserved_0e(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x0E)
     }
 
@@ -344,7 +352,7 @@ impl<'a> ProcDscInfo<'a> {
     /// table only handles the `Resume Next` case (advancing past the
     /// faulting instruction).
     #[inline]
-    pub fn bos_skip_table_offset(&self) -> u16 {
+    pub fn bos_skip_table_offset(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x10)
     }
 
@@ -357,19 +365,19 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// Known values: Class=2, Form/UserDoc=25, UserControl=25.
     #[inline]
-    pub fn base_iface_slot_count(&self) -> u16 {
+    pub fn base_iface_slot_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x12)
     }
 
     /// Reserved field at offset 0x14 (not read by MSVBVM60.DLL runtime).
     #[inline]
-    pub fn reserved_14(&self) -> u16 {
+    pub fn reserved_14(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x14)
     }
 
     /// Reserved field at offset 0x16 (not read by MSVBVM60.DLL runtime).
     #[inline]
-    pub fn reserved_16(&self) -> u16 {
+    pub fn reserved_16(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x16)
     }
 
@@ -380,13 +388,13 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// `total_size` = 0x18 + `cleanup_table_size`.
     #[inline]
-    pub fn cleanup_table_size(&self) -> u16 {
+    pub fn cleanup_table_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x18)
     }
 
     /// Reserved field at offset 0x1A (not read by MSVBVM60.DLL runtime).
     #[inline]
-    pub fn reserved_1a(&self) -> u16 {
+    pub fn reserved_1a(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x1A)
     }
 
@@ -394,7 +402,7 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// Used by `InitLocalCleanupEntries` (0x660ecaf9) as the iteration limit.
     #[inline]
-    pub fn cleanup_count(&self) -> u16 {
+    pub fn cleanup_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x1C)
     }
 
@@ -405,7 +413,7 @@ impl<'a> ProcDscInfo<'a> {
     #[inline]
     pub fn cleanup_total(&self) -> u16 {
         if self.bytes.len() > 0x1F {
-            read_u16_le(self.bytes, 0x1E)
+            read_u16_le(self.bytes, 0x1E).unwrap_or(0)
         } else {
             0
         }
@@ -414,7 +422,7 @@ impl<'a> ProcDscInfo<'a> {
     /// Returns `true` if this procedure has local variables needing cleanup.
     #[inline]
     pub fn has_cleanup(&self) -> bool {
-        self.cleanup_count() > 0 || self.cleanup_total() > 0
+        self.cleanup_count().unwrap_or(0) > 0 || self.cleanup_total() > 0
     }
 
     /// Returns the primary [`CleanupTable`] (at ProcDscInfo +0x18).
@@ -424,8 +432,9 @@ impl<'a> ProcDscInfo<'a> {
     /// variables needing cleanup (strings, COM objects, SafeArrays, etc.).
     pub fn cleanup_table(&self) -> Option<CleanupTable<'a>> {
         let offset = Self::HEADER_SIZE; // 0x18
-        if self.bytes.len() > offset + CleanupTable::HEADER_SIZE {
-            CleanupTable::parse(&self.bytes[offset..])
+        let min_len = offset.checked_add(CleanupTable::HEADER_SIZE)?;
+        if self.bytes.len() > min_len {
+            CleanupTable::parse(self.bytes.get(offset..)?)
         } else {
             None
         }
@@ -441,9 +450,10 @@ impl<'a> ProcDscInfo<'a> {
     /// Located at `ProcDscInfo + total_size`, i.e., immediately after the
     /// primary cleanup table.
     pub fn secondary_table(&self) -> Option<CleanupTable<'a>> {
-        let offset = self.total_size() as usize;
-        if offset >= Self::HEADER_SIZE && self.bytes.len() > offset + CleanupTable::HEADER_SIZE {
-            CleanupTable::parse(&self.bytes[offset..])
+        let offset = self.total_size().ok()? as usize;
+        let min_len = offset.checked_add(CleanupTable::HEADER_SIZE)?;
+        if offset >= Self::HEADER_SIZE && self.bytes.len() > min_len {
+            CleanupTable::parse(self.bytes.get(offset..)?)
         } else {
             None
         }
@@ -458,12 +468,15 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// Note: [`total_size`](Self::total_size) at offset +0x0A only covers
     /// the header and primary table. This method accounts for both tables.
-    pub fn actual_size(&self) -> usize {
-        let base = self.total_size() as usize;
+    pub fn actual_size(&self) -> Result<usize, Error> {
+        let base = self.total_size()? as usize;
         if let Some(secondary) = self.secondary_table() {
-            base + secondary.size() as usize
+            let sec_size = secondary.size()? as usize;
+            base.checked_add(sec_size).ok_or(Error::ArithmeticOverflow {
+                context: "ProcDscInfo::actual_size base + secondary",
+            })
         } else {
-            base
+            Ok(base)
         }
     }
 
@@ -486,14 +499,14 @@ impl<'a> ProcDscInfo<'a> {
     ///
     /// Each argument is 4 bytes (DWORD) on the x86 stack.
     #[inline]
-    pub fn arg_count(&self) -> u16 {
-        self.arg_size() / 4
+    pub fn arg_count(&self) -> Result<u16, Error> {
+        Ok(self.arg_size()? / 4)
     }
 }
 
 /// Offset within ObjectInfo where the constant pool VA is stored.
 ///
-/// This is `ObjectInfo.lpConstants` (+0x34). ProcDscInfo.object_info_va()
+/// This is `ObjectInfo.lpConstants` (+0x34). ProcDscInfo.object_info_va()?
 /// points to ObjectInfo, and we read the constant pool base from +0x34.
 pub const OBJECT_INFO_CONSTANTS_OFFSET: usize = 0x34;
 
@@ -502,7 +515,7 @@ pub const OBJECT_INFO_MIN_SIZE: usize = OBJECT_INFO_CONSTANTS_OFFSET + 4;
 
 /// Reads the constant pool base VA from ObjectInfo data.
 #[inline]
-pub fn read_constants_va(object_info_data: &[u8]) -> u32 {
+pub fn read_constants_va(object_info_data: &[u8]) -> Result<u32, Error> {
     read_u32_le(object_info_data, OBJECT_INFO_CONSTANTS_OFFSET)
 }
 
@@ -663,14 +676,14 @@ mod tests {
         data[0x18..0x1A].copy_from_slice(&0x000Cu16.to_le_bytes()); // cleanup_table_size = 12
         data[0x1C..0x1E].copy_from_slice(&0x0000u16.to_le_bytes()); // cleanup_count = 0
         let pdi = ProcDscInfo::parse(&data).unwrap();
-        assert_eq!(pdi.arg_size(), 0x0010);
-        assert_eq!(pdi.arg_count(), 4);
-        assert_eq!(pdi.frame_size(), 0x0100);
-        assert_eq!(pdi.pcode_back_offset(), 0x0050);
-        assert_eq!(pdi.proc_size(), 0x0050); // legacy alias
-        assert_eq!(pdi.total_size(), 0x0024);
-        assert_eq!(pdi.cleanup_table_size(), 0x000C);
-        assert_eq!(pdi.cleanup_count(), 0);
+        assert_eq!(pdi.arg_size().unwrap(), 0x0010);
+        assert_eq!(pdi.arg_count().unwrap(), 4);
+        assert_eq!(pdi.frame_size().unwrap(), 0x0100);
+        assert_eq!(pdi.pcode_back_offset().unwrap(), 0x0050);
+        assert_eq!(pdi.proc_size().unwrap(), 0x0050); // legacy alias
+        assert_eq!(pdi.total_size().unwrap(), 0x0024);
+        assert_eq!(pdi.cleanup_table_size().unwrap(), 0x000C);
+        assert_eq!(pdi.cleanup_count().unwrap(), 0);
         assert!(!pdi.has_cleanup());
     }
 
@@ -681,14 +694,14 @@ mod tests {
         data[0x18..0x1A].copy_from_slice(&0x003Cu16.to_le_bytes()); // cleanup_table_size = 60
         data[0x1C..0x1E].copy_from_slice(&0x0001u16.to_le_bytes()); // cleanup_count = 1
         let pdi = ProcDscInfo::parse(&data).unwrap();
-        assert_eq!(pdi.total_size(), 0x0054);
-        assert_eq!(pdi.cleanup_table_size(), 0x003C);
-        assert_eq!(pdi.cleanup_count(), 1);
+        assert_eq!(pdi.total_size().unwrap(), 0x0054);
+        assert_eq!(pdi.cleanup_table_size().unwrap(), 0x003C);
+        assert_eq!(pdi.cleanup_count().unwrap(), 1);
         assert!(pdi.has_cleanup());
         // Verify: total = header(0x18) + err_table(0x3C) = 0x54
         assert_eq!(
-            ProcDscInfo::HEADER_SIZE as u16 + pdi.cleanup_table_size(),
-            pdi.total_size()
+            ProcDscInfo::HEADER_SIZE as u16 + pdi.cleanup_table_size().unwrap(),
+            pdi.total_size().unwrap()
         );
     }
 
@@ -705,20 +718,20 @@ mod tests {
     fn test_proc_dsc_info_all_fields() {
         let data = vec![0u8; ProcDscInfo::MIN_SIZE];
         let pdi = ProcDscInfo::parse(&data).unwrap();
-        let _ = pdi.object_info_va();
-        let _ = pdi.arg_size();
-        let _ = pdi.arg_count();
-        let _ = pdi.pcode_back_offset();
-        let _ = pdi.total_size();
-        let _ = pdi.proc_opt_flags();
-        let _ = pdi.reserved_0e();
-        let _ = pdi.bos_skip_table_offset();
-        let _ = pdi.base_iface_slot_count();
-        let _ = pdi.reserved_14();
-        let _ = pdi.reserved_16();
-        let _ = pdi.cleanup_table_size();
-        let _ = pdi.reserved_1a();
-        let _ = pdi.cleanup_count();
+        let _ = pdi.object_info_va().unwrap();
+        let _ = pdi.arg_size().unwrap();
+        let _ = pdi.arg_count().unwrap();
+        let _ = pdi.pcode_back_offset().unwrap();
+        let _ = pdi.total_size().unwrap();
+        let _ = pdi.proc_opt_flags().unwrap();
+        let _ = pdi.reserved_0e().unwrap();
+        let _ = pdi.bos_skip_table_offset().unwrap();
+        let _ = pdi.base_iface_slot_count().unwrap();
+        let _ = pdi.reserved_14().unwrap();
+        let _ = pdi.reserved_16().unwrap();
+        let _ = pdi.cleanup_table_size().unwrap();
+        let _ = pdi.reserved_1a().unwrap();
+        let _ = pdi.cleanup_count().unwrap();
         let _ = pdi.has_cleanup();
     }
 
@@ -726,7 +739,7 @@ mod tests {
     fn test_read_constants_va() {
         let mut data = vec![0u8; OBJECT_INFO_MIN_SIZE];
         data[0x34..0x38].copy_from_slice(&0x00405000u32.to_le_bytes());
-        assert_eq!(read_constants_va(&data), 0x00405000);
+        assert_eq!(read_constants_va(&data).unwrap(), 0x00405000);
     }
 
     // Real data from vb_inject sample, method_2B
@@ -749,14 +762,17 @@ mod tests {
             0x00, 0x00, // +0x1C: wErrBranchCount = 0
         ];
         let pdi = ProcDscInfo::parse(&data).unwrap();
-        assert_eq!(pdi.object_info_va(), 0x004121D8);
-        assert_eq!(pdi.arg_size(), 16);
-        assert_eq!(pdi.arg_count(), 4);
-        assert_eq!(pdi.frame_size(), 8);
-        assert_eq!(pdi.pcode_back_offset(), 8);
-        assert_eq!(pdi.total_size(), 0x24);
+        assert_eq!(pdi.object_info_va().unwrap(), 0x004121D8);
+        assert_eq!(pdi.arg_size().unwrap(), 16);
+        assert_eq!(pdi.arg_count().unwrap(), 4);
+        assert_eq!(pdi.frame_size().unwrap(), 8);
+        assert_eq!(pdi.pcode_back_offset().unwrap(), 8);
+        assert_eq!(pdi.total_size().unwrap(), 0x24);
         assert!(!pdi.has_cleanup());
         // Verify: total = 0x18 + err_table(0x0C) = 0x24
-        assert_eq!(0x18 + pdi.cleanup_table_size(), pdi.total_size());
+        assert_eq!(
+            0x18 + pdi.cleanup_table_size().unwrap(),
+            pdi.total_size().unwrap()
+        );
     }
 }

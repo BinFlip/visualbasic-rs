@@ -8,7 +8,7 @@
 //! 0007  ExitProc
 //! ```
 
-use core::fmt;
+use std::fmt;
 
 use crate::pcode::{decoder::Instruction, operand::Operand};
 
@@ -34,21 +34,21 @@ impl fmt::Display for Operand {
             Operand::Byte(v) => write!(f, "0x{v:02X}"),
             Operand::Int16(v) => {
                 if *v < 0 {
-                    write!(f, "-0x{:04X}", -(*v as i32))
+                    write!(f, "-0x{:04X}", v.unsigned_abs())
                 } else {
                     write!(f, "0x{v:04X}")
                 }
             }
             Operand::Int32(v) => {
                 if *v < 0 {
-                    write!(f, "-0x{:08X}", -(*v as i64))
+                    write!(f, "-0x{:08X}", v.unsigned_abs())
                 } else {
                     write!(f, "0x{v:08X}")
                 }
             }
             Operand::StackVar(v) => {
                 if *v < 0 {
-                    write!(f, "var_{:X}", (-*v) as u16)
+                    write!(f, "var_{:X}", v.unsigned_abs())
                 } else {
                     write!(f, "arg_{:X}", *v as u16)
                 }

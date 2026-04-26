@@ -1,6 +1,6 @@
 [package]
 name = "visualbasic"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Johann Kempter <admin@binflip.rs>"]
 rust-version = "1.85"
@@ -10,9 +10,32 @@ repository = "https://github.com/BinFlip/visualbasic-rs"
 readme = "README.md"
 keywords = ["vb6", "pcode", "parser", "reverse-engineering", "binary-analysis"]
 categories = ["parser-implementations"]
+# Exclude internal planning/research notes from the published crate.
+# `data/*.csv` is needed by build.rs at compile time and stays bundled;
+# the prose files in `data/` are research notes that don't ship.
+exclude = [
+    "FEATURES.md",
+    "TODO.md",
+    "MSVBVM60_RUNTIME.md",
+    "data/VB6_PCODE_RESEARCH.md",
+    "data/vb6_form_format.md",
+    ".github/",
+    "*.bndb",
+    "*.bin.bndb",
+]
+
+[features]
+default = []
+# Emits structured `tracing` events at the per-iteration silent-skip sites
+# (decode errors, malformed entries, unparseable controls, etc.). Useful
+# for diagnosing why a parse silently dropped data without changing the
+# fail-soft semantics. No effect when disabled — the helpers compile to
+# no-ops.
+tracing = ["dep:tracing"]
 
 [dependencies]
 goblin = "0.10.5"
+tracing = { version = "0.1.44", optional = true, default-features = false, features = ["std"] }
 
 [dev-dependencies]
 proptest = "1.11.0"

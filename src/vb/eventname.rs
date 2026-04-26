@@ -37,7 +37,7 @@ pub fn event_name(slot: u16, ctype: FormControlType) -> Option<&'static str> {
             if (slot as usize) < generated::STANDARD_EVENTS.len() {
                 generated::STANDARD_EVENTS.get(slot as usize).copied()
             } else {
-                let extra_slot = slot as usize - generated::STANDARD_EVENTS.len();
+                let extra_slot = (slot as usize).checked_sub(generated::STANDARD_EVENTS.len())?;
                 generated::USERCONTROL_EVENTS.get(extra_slot).copied()
             }
         }

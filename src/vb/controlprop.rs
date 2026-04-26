@@ -22,9 +22,9 @@
 //! | 0x03 | 1 | `bFlags` — additional flags (bit 0 checked for SafeArray) |
 //! | 0x04 | var | Type-dependent data |
 
-use core::fmt;
+use std::fmt;
 
-use crate::util::read_u16_le;
+use crate::{error::Error, util::read_u16_le};
 
 /// Type of a control property initialization entry.
 ///
@@ -134,34 +134,37 @@ impl<'a> ControlPropertyEntry<'a> {
 
     /// Target offset within instance data buffer at entry+0x00.
     #[inline]
-    pub fn frame_offset(&self) -> u16 {
+    pub fn frame_offset(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
     /// Raw type byte at entry+0x02.
+    ///
+    /// Returns 0 if the backing buffer is shorter than the header.
     #[inline]
     pub fn raw_type(&self) -> u8 {
-        self.bytes[0x02]
+        self.bytes.get(0x02).copied().unwrap_or(0)
     }
 
     /// Property type (low 4 bits of type byte).
+    ///
+    /// Returns [`ControlPropertyType::Empty`] if the backing buffer is shorter
+    /// than the header (since the raw byte defaults to 0).
     pub fn property_type(&self) -> ControlPropertyType {
-        ControlPropertyType::from_raw(self.bytes[0x02])
+        ControlPropertyType::from_raw(self.raw_type())
     }
 
     /// Flags byte at entry+0x03.
+    ///
+    /// Returns 0 if the backing buffer is shorter than the header.
     #[inline]
     pub fn flags(&self) -> u8 {
-        self.bytes[0x03]
+        self.bytes.get(0x03).copied().unwrap_or(0)
     }
 
     /// Type-dependent data bytes starting at entry+0x04.
     pub fn data(&self) -> &'a [u8] {
-        if self.bytes.len() > Self::HEADER_SIZE {
-            &self.bytes[Self::HEADER_SIZE..]
-        } else {
-            &[]
-        }
+        self.bytes.get(Self::HEADER_SIZE..).unwrap_or(&[])
     }
 
     /// Total size of this entry (header + data) in bytes.
@@ -172,7 +175,13 @@ impl<'a> ControlPropertyEntry<'a> {
     ///
     /// Note: CalcPropertyDataSize returns the TOTAL step size (including
     /// the 4-byte header), so base values 0x28/0x38 already include it.
-    pub fn total_size(&self) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the entry header is incomplete or
+    /// the SafeArray descriptor cannot be parsed, and
+    /// [`Error::ArithmeticOverflow`] if the size computation overflows.
+    pub fn total_size(&self) -> Result<usize, Error> {
         let ptype = self.property_type();
         if ptype == ControlPropertyType::SafeArray {
             // CalcPropertyDataSize returns total step size (header included)
@@ -181,7 +190,11 @@ impl<'a> ControlPropertyEntry<'a> {
         let base = ptype.base_data_size();
         // Flags byte bit 2 adds a 6-byte minimum
         if base == 0 && self.flags() & 0x04 != 0 {
-            return Self::HEADER_SIZE + 6;
+            return Self::HEADER_SIZE
+                .checked_add(6)
+                .ok_or(Error::ArithmeticOverflow {
+                    context: "ControlPropertyEntry::total_size header+6",
+                });
         }
         // Types 1,2,3,0xB: flags bit 5 doubles to 8 bytes
         if matches!(
@@ -192,38 +205,59 @@ impl<'a> ControlPropertyEntry<'a> {
                 | ControlPropertyType::Boolean
         ) && self.flags() & 0x20 != 0
         {
-            return Self::HEADER_SIZE + 8;
+            return Self::HEADER_SIZE
+                .checked_add(8)
+                .ok_or(Error::ArithmeticOverflow {
+                    context: "ControlPropertyEntry::total_size header+8",
+                });
         }
-        Self::HEADER_SIZE + base
+        Self::HEADER_SIZE
+            .checked_add(base)
+            .ok_or(Error::ArithmeticOverflow {
+                context: "ControlPropertyEntry::total_size header+base",
+            })
     }
 
     /// Computes the TOTAL entry size for a SafeArray from the inline descriptor.
     ///
     /// The base values (0x28/0x38) already include the 4-byte header.
     /// Mirrors CalcPropertyDataSize which returns total step size.
-    fn calc_safearray_total_size(&self) -> usize {
+    fn calc_safearray_total_size(&self) -> Result<usize, Error> {
         // Determine descriptor offset within entry
-        let elem_info = if self.bytes.len() > 0x08 {
-            self.bytes[0x08]
-        } else {
-            0
-        };
+        let elem_info = self.bytes.get(0x08).copied().unwrap_or(0);
         let desc_offset: usize = if elem_info & 0x60 != 0 { 0x20 } else { 0x10 };
 
         // Read descriptor: u16 dim_count + u8 elem_flags
-        if self.bytes.len() < desc_offset + 3 {
+        let needed = desc_offset
+            .checked_add(3)
+            .ok_or(Error::ArithmeticOverflow {
+                context: "calc_safearray_total_size desc_offset+3",
+            })?;
+        if self.bytes.len() < needed {
             // Not enough data — use a safe minimum
-            return 0x28;
+            return Ok(0x28);
         }
-        let dim_count = read_u16_le(self.bytes, desc_offset) as usize;
-        let elem_flags = self.bytes[desc_offset + 2];
+        let dim_count = read_u16_le(self.bytes, desc_offset)? as usize;
+        let elem_flags_offset = desc_offset
+            .checked_add(2)
+            .ok_or(Error::ArithmeticOverflow {
+                context: "calc_safearray_total_size desc_offset+2",
+            })?;
+        let elem_flags = self
+            .bytes
+            .get(elem_flags_offset)
+            .copied()
+            .ok_or(Error::Truncated {
+                needed: elem_flags_offset.saturating_add(1),
+                available: self.bytes.len(),
+            })?;
 
         // Base size depends on element info
         let base: usize = if elem_info & 0x60 != 0 { 0x38 } else { 0x28 };
 
         // Per-dimension data: 8 bytes per dim, minus 8 (first dim is in the base)
         let dim_data = if dim_count > 0 {
-            dim_count.saturating_sub(1) * 8
+            dim_count.saturating_sub(1).saturating_mul(8)
         } else {
             0
         };
@@ -231,7 +265,11 @@ impl<'a> ControlPropertyEntry<'a> {
         // Extra 4 bytes if element type has upper bits set
         let elem_extra: usize = if elem_flags & 0xE0 != 0 { 4 } else { 0 };
 
-        base + dim_data + elem_extra
+        base.checked_add(dim_data)
+            .and_then(|v| v.checked_add(elem_extra))
+            .ok_or(Error::ArithmeticOverflow {
+                context: "calc_safearray_total_size base+dim_data+elem_extra",
+            })
     }
 }
 
@@ -260,17 +298,24 @@ impl<'a> Iterator for ControlPropertyIter<'a> {
     type Item = ControlPropertyEntry<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining == 0 || self.pos + ControlPropertyEntry::HEADER_SIZE > self.data.len() {
+        if self.remaining == 0 {
             return None;
         }
-        let entry_bytes = &self.data[self.pos..];
+        let header_end = self.pos.checked_add(ControlPropertyEntry::HEADER_SIZE)?;
+        if header_end > self.data.len() {
+            return None;
+        }
+        let entry_bytes = self.data.get(self.pos..)?;
         if entry_bytes.len() < ControlPropertyEntry::HEADER_SIZE {
             return None;
         }
         let entry = ControlPropertyEntry { bytes: entry_bytes };
-        let size = entry.total_size().max(ControlPropertyEntry::HEADER_SIZE);
-        self.pos += size;
-        self.remaining -= 1;
+        let size = entry
+            .total_size()
+            .ok()?
+            .max(ControlPropertyEntry::HEADER_SIZE);
+        self.pos = self.pos.checked_add(size)?;
+        self.remaining = self.remaining.checked_sub(1)?;
         Some(entry)
     }
 }
@@ -333,12 +378,12 @@ mod tests {
         let entry = ControlPropertyEntry {
             bytes: &CLS_CRC32_SA_ENTRY,
         };
-        assert_eq!(entry.frame_offset(), 0x38);
+        assert_eq!(entry.frame_offset().unwrap(), 0x38);
         assert_eq!(entry.property_type(), ControlPropertyType::SafeArray);
         assert_eq!(entry.flags(), 0x00);
         // Total: base(0x28) + dim_data(0) + elem_extra(4) = 0x2C
         // (base already includes 4-byte header)
-        assert_eq!(entry.total_size(), 0x2C);
+        assert_eq!(entry.total_size().unwrap(), 0x2C);
     }
 
     #[test]
@@ -346,7 +391,7 @@ mod tests {
         let data: [u8; 8] = [0x34, 0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00];
         let entry = ControlPropertyEntry { bytes: &data };
         assert_eq!(entry.property_type(), ControlPropertyType::Long);
-        assert_eq!(entry.total_size(), 4 + 4); // header + 4 bytes
+        assert_eq!(entry.total_size().unwrap(), 4 + 4); // header + 4 bytes
     }
 
     #[test]
@@ -357,7 +402,7 @@ mod tests {
         ];
         let entry = ControlPropertyEntry { bytes: &data };
         assert_eq!(entry.property_type(), ControlPropertyType::Long);
-        assert_eq!(entry.total_size(), 4 + 8); // header + 8 (flags bit 5)
+        assert_eq!(entry.total_size().unwrap(), 4 + 8); // header + 8 (flags bit 5)
     }
 
     #[test]

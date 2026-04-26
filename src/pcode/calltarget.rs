@@ -69,8 +69,10 @@ impl<'a> ImportResolver<'a> {
     pub fn new(map: &'a AddressMap<'a>, external_table_va: u32, external_count: u32) -> Self {
         let mut externals = Vec::new();
         if external_table_va != 0 {
+            let entry_size = ExternalTableEntry::SIZE as u32;
             for i in 0..external_count {
-                let offset = i * ExternalTableEntry::SIZE as u32;
+                // Bounded by external_count loop; saturating prevents wrap on hostile counts.
+                let offset = i.saturating_mul(entry_size);
                 let entry_va = external_table_va.wrapping_add(offset);
                 if let Ok(data) = map.slice_from_va(entry_va, ExternalTableEntry::SIZE)
                     && let Ok(entry) = ExternalTableEntry::parse(data)
@@ -84,7 +86,18 @@ impl<'a> ImportResolver<'a> {
 
     /// Creates an import resolver from an existing [`VbProject`].
     pub fn from_project(project: &'a VbProject<'a>) -> Self {
-        let externals: Vec<_> = project.externals().filter_map(|r| r.ok()).collect();
+        let externals: Vec<_> = project
+            .externals()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| match r {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    crate::trace::warn_drop!("import_resolver.externals", error = ?e);
+                    None
+                }
+            })
+            .collect();
         Self {
             map: project.address_map(),
             externals,
@@ -167,14 +180,25 @@ impl<'a> CallResolver<'a> {
         control_index: u16,
         object: &VbObject<'a, '_>,
     ) -> CallTarget {
-        let controls: Vec<_> = object.controls().filter_map(|r| r.ok()).collect();
+        let controls: Vec<_> = object
+            .controls()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| match r {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    crate::trace::warn_drop!("call_resolver.vtable_controls", error = ?e);
+                    None
+                }
+            })
+            .collect();
 
         let control_name = controls.get(control_index as usize).and_then(|ctrl| {
-            let name_bytes = ctrl.name();
-            if name_bytes.is_empty() {
+            let name = ctrl.name();
+            if name.is_empty() {
                 None
             } else {
-                Some(String::from_utf8_lossy(name_bytes).into_owned())
+                Some(name.into_owned())
             }
         });
 

@@ -108,7 +108,7 @@ impl<'a> PublicVarTable<'a> {
             });
         }
 
-        let var_count = read_u16_le(data, 0x06);
+        let var_count = read_u16_le(data, 0x06)?;
 
         // Entries follow the header; we need at least header + var_count * 4 bytes.
         // Some objects have extra padding entries, so we tolerate shorter data
@@ -124,7 +124,7 @@ impl<'a> PublicVarTable<'a> {
 
     /// Total size declared in the header at offset 0x00.
     #[inline]
-    pub fn total_size(&self) -> u16 {
+    pub fn total_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
@@ -134,7 +134,7 @@ impl<'a> PublicVarTable<'a> {
     /// but other data (COM interface info, string fragments, etc.).
     /// Use [`valid_vars`](Self::valid_vars) to skip these.
     #[inline]
-    pub fn extra_count(&self) -> u16 {
+    pub fn extra_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x04)
     }
 
@@ -148,7 +148,7 @@ impl<'a> PublicVarTable<'a> {
     /// (e.g., 0x48 for 15 variables ending at offset 0x3C + 8-byte Double).
     /// For classes/forms: equivalent to [`ClassFormPublicBytes::instance_size`].
     #[inline]
-    pub fn data_frame_size(&self) -> u16 {
+    pub fn data_frame_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x02)
     }
 
@@ -165,13 +165,15 @@ impl<'a> PublicVarTable<'a> {
         if index >= self.var_count {
             return None;
         }
-        let offset = Self::HEADER_SIZE + index as usize * Self::ENTRY_SIZE;
-        if offset + Self::ENTRY_SIZE > self.bytes.len() {
+        let offset =
+            Self::HEADER_SIZE.checked_add((index as usize).checked_mul(Self::ENTRY_SIZE)?)?;
+        let end = offset.checked_add(Self::ENTRY_SIZE)?;
+        if end > self.bytes.len() {
             return None;
         }
         Some(PublicVarEntry {
-            frame_offset: read_u16_le(self.bytes, offset),
-            type_code: read_u16_le(self.bytes, offset + 2),
+            frame_offset: read_u16_le(self.bytes, offset).ok()?,
+            type_code: read_u16_le(self.bytes, offset.checked_add(2)?).ok()?,
         })
     }
 
@@ -193,6 +195,34 @@ impl<'a> PublicVarTable<'a> {
 }
 
 /// A single public variable descriptor entry.
+///
+/// # Available data
+///
+/// Each entry is exactly 4 bytes: `frame_offset` (u16) + `type_code` (u16).
+/// There is **no per-entry name VA** in `PublicVarTable` — the runtime
+/// (`EbLoadRunTime` at `0x6602F6CE`) reads only the table header for the
+/// instance-buffer size and never inspects entries for names.
+///
+/// # Recovering variable names
+///
+/// Public-variable names ARE recoverable indirectly: the VB6 compiler
+/// emits `Property Get` / `Let` / `Set` accessors for each public module
+/// variable, and these appear at the **tail** of the FuncTypDesc array
+/// (at indices `>= func_count`) reachable via
+/// [`PrivateObjectDescriptor::func_type_descs_va`](super::privateobj::PrivateObjectDescriptor::func_type_descs_va).
+/// Use [`VbObject::func_type_descs`](crate::project::VbObject::func_type_descs)
+/// to walk that array and recover names by stripping the `Get_` / `Let_` /
+/// `Set_` prefix from the accessor name. One-to-one mapping with this
+/// table is not exhaustively verified across all object types.
+///
+/// # Default values
+///
+/// VB6 syntax does not allow inline initializers at module scope
+/// (`Public x As Long = 5` is invalid), so this table carries **no static
+/// default values**. Defaults observed at runtime are produced by
+/// compiler-generated initialization P-Code (`Class_Initialize` and
+/// equivalents), not by metadata. Recovering them requires P-Code
+/// analysis of the module's init procedure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicVarEntry {
     /// Byte offset within the module's public data area.
@@ -280,7 +310,7 @@ impl Iterator for PublicVarIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let entry = self.table.var(self.index)?;
-        self.index += 1;
+        self.index = self.index.saturating_add(1);
         Some(entry)
     }
 }
@@ -343,7 +373,7 @@ impl<'a> ClassFormPublicBytes<'a> {
     /// Compiler metadata. Not read by the runtime.
     /// Forms: typically 0x0C. Classes: 0x38+.
     #[inline]
-    pub fn data_size(&self) -> u16 {
+    pub fn data_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
@@ -354,7 +384,7 @@ impl<'a> ClassFormPublicBytes<'a> {
     /// - Forms: typically 0x44 (68 bytes)
     /// - Classes: typically 0x28-0x60+ depending on member variables
     #[inline]
-    pub fn instance_size(&self) -> u16 {
+    pub fn instance_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x02)
     }
 
@@ -363,7 +393,7 @@ impl<'a> ClassFormPublicBytes<'a> {
     /// Inner loop limit in `sub_6601505e`. Zero for forms without
     /// embedded control properties.
     #[inline]
-    pub fn property_count(&self) -> u16 {
+    pub fn property_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x04)
     }
 
@@ -373,14 +403,14 @@ impl<'a> ClassFormPublicBytes<'a> {
     /// typed control property descriptor with variable length.
     /// Zero for forms without embedded controls.
     #[inline]
-    pub fn control_count(&self) -> u16 {
+    pub fn control_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x06)
     }
 
     /// Returns `true` if this structure has control initialization entries.
     #[inline]
     pub fn has_controls(&self) -> bool {
-        self.control_count() > 0
+        self.control_count().is_ok_and(|c| c > 0)
     }
 
     /// Raw bytes of the control/property entry array starting at +0x0C.
@@ -389,11 +419,7 @@ impl<'a> ClassFormPublicBytes<'a> {
     /// typed control property descriptors parsed by `sub_660481fc`.
     /// When false, may contain COM interface GUIDs (compiler metadata).
     pub fn entry_data(&self) -> &'a [u8] {
-        if self.bytes.len() > 0x0C {
-            &self.bytes[0x0C..]
-        } else {
-            &[]
-        }
+        self.bytes.get(0x0C..).unwrap_or(&[])
     }
 
     /// Default interface IID at offset 0x0C (when no controls are present).
@@ -401,20 +427,20 @@ impl<'a> ClassFormPublicBytes<'a> {
     /// Only meaningful when `control_count() == 0`. When controls ARE present,
     /// offset +0x0C contains control property data instead.
     pub fn default_iid(&self) -> Option<Guid> {
-        if self.has_controls() || self.bytes.len() < 0x1C {
+        if self.has_controls() {
             return None;
         }
-        Guid::from_bytes(&self.bytes[0x0C..0x1C])
+        Guid::from_bytes(self.bytes.get(0x0C..0x1C)?)
     }
 
     /// Events interface IID at offset 0x1C (when no controls are present).
     ///
     /// Only meaningful when `control_count() == 0`.
     pub fn events_iid(&self) -> Option<Guid> {
-        if self.has_controls() || self.bytes.len() < 0x2C {
+        if self.has_controls() {
             return None;
         }
-        Guid::from_bytes(&self.bytes[0x1C..0x2C])
+        Guid::from_bytes(self.bytes.get(0x1C..0x2C)?)
     }
 
     /// Returns an iterator over control/property init entries starting at +0x0C.
@@ -422,13 +448,14 @@ impl<'a> ClassFormPublicBytes<'a> {
     /// Only meaningful when [`has_controls`](Self::has_controls) is true.
     /// See [`controlprop`](super::controlprop) for entry types and format.
     pub fn control_entries(&self) -> ControlPropertyIter<'a> {
-        ControlPropertyIter::new(self.entry_data(), self.control_count())
+        ControlPropertyIter::new(self.entry_data(), self.control_count().unwrap_or(0))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vb::controlprop::ControlPropertyType;
 
     // Real data from mod_Variaveis in pe_x86_vb_loader sample
     // 15 public variables, all type 0x0001 except last = 0x0105
@@ -450,7 +477,7 @@ mod tests {
     #[test]
     fn test_parse_mod_variaveis() {
         let table = PublicVarTable::parse(&MOD_VARIAVEIS).unwrap();
-        assert_eq!(table.total_size(), 0x4E);
+        assert_eq!(table.total_size().unwrap(), 0x4E);
         assert_eq!(table.var_count(), 15);
 
         // First variable
@@ -471,7 +498,7 @@ mod tests {
     #[test]
     fn test_parse_mod_util() {
         let table = PublicVarTable::parse(&MOD_UTIL).unwrap();
-        assert_eq!(table.total_size(), 0x10);
+        assert_eq!(table.total_size().unwrap(), 0x10);
         assert_eq!(table.var_count(), 1);
 
         let v0 = table.var(0).unwrap();
@@ -537,10 +564,10 @@ mod tests {
     #[test]
     fn test_form_no_controls() {
         let cfpb = ClassFormPublicBytes::parse(&FORM1_PUBLIC_BYTES).unwrap();
-        assert_eq!(cfpb.data_size(), 0x0C);
-        assert_eq!(cfpb.instance_size(), 0x44);
-        assert_eq!(cfpb.property_count(), 0);
-        assert_eq!(cfpb.control_count(), 0);
+        assert_eq!(cfpb.data_size().unwrap(), 0x0C);
+        assert_eq!(cfpb.instance_size().unwrap(), 0x44);
+        assert_eq!(cfpb.property_count().unwrap(), 0);
+        assert_eq!(cfpb.control_count().unwrap(), 0);
         assert!(!cfpb.has_controls());
         // GUIDs available when no controls
         assert!(cfpb.default_iid().is_some());
@@ -551,10 +578,10 @@ mod tests {
     #[test]
     fn test_class_with_controls() {
         let cfpb = ClassFormPublicBytes::parse(&CLS_CRC32_PUBLIC_BYTES).unwrap();
-        assert_eq!(cfpb.data_size(), 0x38);
-        assert_eq!(cfpb.instance_size(), 0x60);
-        assert_eq!(cfpb.property_count(), 1);
-        assert_eq!(cfpb.control_count(), 1);
+        assert_eq!(cfpb.data_size().unwrap(), 0x38);
+        assert_eq!(cfpb.instance_size().unwrap(), 0x60);
+        assert_eq!(cfpb.property_count().unwrap(), 1);
+        assert_eq!(cfpb.control_count().unwrap(), 1);
         assert!(cfpb.has_controls());
         // GUIDs NOT available when controls present (+0x0C is control data)
         assert!(cfpb.default_iid().is_none());
@@ -565,11 +592,10 @@ mod tests {
 
     #[test]
     fn test_class_control_entries() {
-        use crate::vb::controlprop::ControlPropertyType;
         let cfpb = ClassFormPublicBytes::parse(&CLS_CRC32_PUBLIC_BYTES).unwrap();
         let entries: Vec<_> = cfpb.control_entries().collect();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].frame_offset(), 0x38);
+        assert_eq!(entries[0].frame_offset().unwrap(), 0x38);
         assert_eq!(entries[0].property_type(), ControlPropertyType::SafeArray);
         assert_eq!(entries[0].flags(), 0x00);
     }

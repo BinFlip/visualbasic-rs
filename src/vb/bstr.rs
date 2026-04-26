@@ -28,7 +28,7 @@
 //!
 //! Total binary footprint: `4 + byte_length + 2` bytes.
 
-use core::fmt;
+use std::fmt;
 
 /// View of a COM BSTR in the PE image.
 ///
@@ -98,13 +98,17 @@ impl<'a> BStr<'a> {
     /// Number of UTF-16 code units (characters) in the string.
     #[inline]
     pub fn char_count(&self) -> usize {
-        self.byte_length as usize / 2
+        (self.byte_length as usize).checked_div(2).unwrap_or(0)
     }
 
     /// Total binary footprint in the PE image: `4 (length) + byte_length + 2 (null)`.
+    ///
+    /// Saturates at `usize::MAX` if the declared length is malformed.
     #[inline]
     pub fn total_binary_size(&self) -> usize {
-        4 + self.byte_length as usize + 2
+        (self.byte_length as usize)
+            .saturating_add(4)
+            .saturating_add(2)
     }
 
     /// Raw UTF-16LE string bytes (without length prefix or null terminator).
@@ -129,7 +133,8 @@ impl<'a> BStr<'a> {
         let u16s: Vec<u16> = self
             .data
             .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .filter_map(|pair| <[u8; 2]>::try_from(pair).ok())
+            .map(u16::from_le_bytes)
             .collect();
         String::from_utf16_lossy(&u16s)
     }

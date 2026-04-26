@@ -86,7 +86,8 @@ pub enum Operand {
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnexpectedEndOfPCode`] if the stream is too short for the operands.
+/// - [`Error::UnexpectedEndOfPCode`] if the stream is too short for the operands.
+/// - [`Error::ArithmeticOverflow`] if `pos` advancement would overflow `usize`.
 pub fn decode_operands(
     format: &str,
     stream: &[u8],
@@ -94,91 +95,105 @@ pub fn decode_operands(
     limit: usize,
 ) -> Result<[Option<Operand>; 4], Error> {
     let mut operands = [None; 4];
-    let mut op_idx = 0;
+    let mut op_idx = 0usize;
+    let mut iter = format.bytes();
 
-    let chars: Vec<char> = format.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() && op_idx < 4 {
-        if chars[i] == '%' && i + 1 < chars.len() {
-            let spec = chars[i + 1];
-            let operand = match spec {
-                '1' => {
-                    ensure_bytes(stream, *pos, 1, limit)?;
-                    let val = stream[*pos];
-                    *pos += 1;
-                    Operand::Byte(val)
-                }
-                '2' => {
-                    ensure_bytes(stream, *pos, 2, limit)?;
-                    let val = read_i16_le(stream, *pos);
-                    *pos += 2;
-                    Operand::Int16(val)
-                }
-                '4' => {
-                    ensure_bytes(stream, *pos, 4, limit)?;
-                    let val = read_i32_le(stream, *pos);
-                    *pos += 4;
-                    Operand::Int32(val)
-                }
-                'a' => {
-                    ensure_bytes(stream, *pos, 2, limit)?;
-                    let val = read_i16_le(stream, *pos);
-                    *pos += 2;
-                    Operand::StackVar(val)
-                }
-                's' => {
-                    ensure_bytes(stream, *pos, 2, limit)?;
-                    let val = read_u16_le(stream, *pos);
-                    *pos += 2;
-                    Operand::ConstPoolIndex(val)
-                }
-                'l' => {
-                    ensure_bytes(stream, *pos, 2, limit)?;
-                    let val = read_u16_le(stream, *pos);
-                    *pos += 2;
-                    Operand::JumpTarget(val)
-                }
-                'c' => {
-                    ensure_bytes(stream, *pos, 2, limit)?;
-                    let val = read_u16_le(stream, *pos);
-                    *pos += 2;
-                    Operand::ControlIndex(val)
-                }
-                'v' => {
-                    ensure_bytes(stream, *pos, 4, limit)?;
-                    let offset = read_u16_le(stream, *pos);
-                    let control = read_u16_le(stream, *pos + 2);
-                    *pos += 4;
-                    Operand::VTableRef { offset, control }
-                }
-                'x' => {
-                    ensure_bytes(stream, *pos, 4, limit)?;
-                    let import = read_u16_le(stream, *pos);
-                    let arg_info = read_u16_le(stream, *pos + 2);
-                    *pos += 4;
-                    Operand::ExternalCall { import, arg_info }
-                }
-                '}' => {
-                    // End-of-procedure marker, consumes 0 bytes
-                    i += 2;
-                    continue;
-                }
-                _ => {
-                    // Unknown specifier, skip
-                    i += 2;
-                    continue;
-                }
-            };
-            operands[op_idx] = Some(operand);
-            op_idx += 1;
-            i += 2;
-        } else {
-            i += 1;
+    while op_idx < operands.len() {
+        let Some(b) = iter.next() else { break };
+        if b != b'%' {
+            continue;
         }
+        let Some(spec) = iter.next() else { break };
+        let operand = match spec {
+            b'1' => {
+                ensure_bytes(stream, *pos, 1, limit)?;
+                let val = stream
+                    .get(*pos)
+                    .copied()
+                    .ok_or(Error::UnexpectedEndOfPCode {
+                        offset: *pos,
+                        needed: 1,
+                    })?;
+                advance(pos, 1)?;
+                Operand::Byte(val)
+            }
+            b'2' => {
+                ensure_bytes(stream, *pos, 2, limit)?;
+                let val = read_i16_le(stream, *pos)?;
+                advance(pos, 2)?;
+                Operand::Int16(val)
+            }
+            b'4' => {
+                ensure_bytes(stream, *pos, 4, limit)?;
+                let val = read_i32_le(stream, *pos)?;
+                advance(pos, 4)?;
+                Operand::Int32(val)
+            }
+            b'a' => {
+                ensure_bytes(stream, *pos, 2, limit)?;
+                let val = read_i16_le(stream, *pos)?;
+                advance(pos, 2)?;
+                Operand::StackVar(val)
+            }
+            b's' => {
+                ensure_bytes(stream, *pos, 2, limit)?;
+                let val = read_u16_le(stream, *pos)?;
+                advance(pos, 2)?;
+                Operand::ConstPoolIndex(val)
+            }
+            b'l' => {
+                ensure_bytes(stream, *pos, 2, limit)?;
+                let val = read_u16_le(stream, *pos)?;
+                advance(pos, 2)?;
+                Operand::JumpTarget(val)
+            }
+            b'c' => {
+                ensure_bytes(stream, *pos, 2, limit)?;
+                let val = read_u16_le(stream, *pos)?;
+                advance(pos, 2)?;
+                Operand::ControlIndex(val)
+            }
+            b'v' => {
+                ensure_bytes(stream, *pos, 4, limit)?;
+                let offset = read_u16_le(stream, *pos)?;
+                let control_pos = pos.checked_add(2).ok_or(Error::ArithmeticOverflow {
+                    context: "operand %v control offset",
+                })?;
+                let control = read_u16_le(stream, control_pos)?;
+                advance(pos, 4)?;
+                Operand::VTableRef { offset, control }
+            }
+            b'x' => {
+                ensure_bytes(stream, *pos, 4, limit)?;
+                let import = read_u16_le(stream, *pos)?;
+                let arg_pos = pos.checked_add(2).ok_or(Error::ArithmeticOverflow {
+                    context: "operand %x arg_info offset",
+                })?;
+                let arg_info = read_u16_le(stream, arg_pos)?;
+                advance(pos, 4)?;
+                Operand::ExternalCall { import, arg_info }
+            }
+            // End-of-procedure marker (%}) and unknown specifiers consume 0 bytes.
+            _ => continue,
+        };
+        if let Some(slot) = operands.get_mut(op_idx) {
+            *slot = Some(operand);
+        }
+        op_idx = op_idx.checked_add(1).ok_or(Error::ArithmeticOverflow {
+            context: "operand index",
+        })?;
     }
 
     Ok(operands)
+}
+
+/// Advances `*pos` by `delta`, returning [`Error::ArithmeticOverflow`] on wrap.
+#[inline]
+fn advance(pos: &mut usize, delta: usize) -> Result<(), Error> {
+    *pos = pos.checked_add(delta).ok_or(Error::ArithmeticOverflow {
+        context: "operand pos advance",
+    })?;
+    Ok(())
 }
 
 /// Ensures that at least `needed` bytes are available at `pos` within `limit`.

@@ -11,6 +11,7 @@ use crate::{
     util::read_u32_le,
     vb::{
         constantpool::ConstantPool,
+        controlprop::ControlPropertyIter,
         procedure::{self, ProcDscInfo},
     },
 };
@@ -62,9 +63,9 @@ impl<'a> PCodeMethod<'a> {
     /// resolved to valid file offsets.
     pub fn parse(map: &AddressMap<'a>, methods_va: u32, index: u16) -> Result<Self, Error> {
         // Each method table entry is 4 bytes (a VA)
-        let entry_va = methods_va.wrapping_add(index as u32 * 4);
+        let entry_va = methods_va.wrapping_add(u32::from(index).wrapping_mul(4));
         let entry_data = map.slice_from_va(entry_va, 4)?;
-        let method_va = read_u32_le(entry_data, 0);
+        let method_va = read_u32_le(entry_data, 0)?;
 
         // The method_va may point to a call stub or directly to ProcDscInfo.
         // Two known P-Code stub patterns:
@@ -72,13 +73,17 @@ impl<'a> PCodeMethod<'a> {
         //   Pattern 2: 33 C0 BA xx xx xx xx 68 xx xx xx xx C3
         //              (xor eax,eax; mov edx, <RTMI>; push <ret>; ret)
         let stub_data = map.slice_from_va(method_va, 12)?;
+        let stub_head = stub_data.first_chunk::<3>().ok_or(Error::Truncated {
+            needed: 3,
+            available: stub_data.len(),
+        })?;
 
-        let proc_dsc_va = if stub_data[0] == 0xBA {
+        let proc_dsc_va = if stub_head[0] == 0xBA {
             // Pattern 1: mov edx, imm32 at offset 0
-            read_u32_le(stub_data, 1)
-        } else if stub_data[0] == 0x33 && stub_data[1] == 0xC0 && stub_data[2] == 0xBA {
+            read_u32_le(stub_data, 1)?
+        } else if stub_head == &[0x33, 0xC0, 0xBA] {
             // Pattern 2: xor eax,eax; mov edx, imm32 at offset 2
-            read_u32_le(stub_data, 3)
+            read_u32_le(stub_data, 3)?
         } else {
             // Assume it's a direct pointer to ProcDscInfo
             method_va
@@ -87,21 +92,26 @@ impl<'a> PCodeMethod<'a> {
         // Parse ProcDscInfo — read MIN_SIZE first to get total_size, then re-read full
         let pdi_header = map.slice_from_va(proc_dsc_va, ProcDscInfo::MIN_SIZE)?;
         let pdi_tmp = ProcDscInfo::parse(pdi_header)?;
-        let full_size = (pdi_tmp.total_size() as usize).max(ProcDscInfo::MIN_SIZE);
+        let full_size = (pdi_tmp.total_size()? as usize).max(ProcDscInfo::MIN_SIZE);
         let pdi_data = map.slice_from_va(proc_dsc_va, full_size)?;
         let proc_dsc = ProcDscInfo::parse(pdi_data)?;
 
         // P-Code bytes are at [proc_dsc_va - proc_size .. proc_dsc_va]
-        let proc_size = proc_dsc.proc_size();
-        let pcode_va = proc_dsc_va.wrapping_sub(proc_size as u32);
+        let proc_size = proc_dsc.proc_size()?;
+        let pcode_va = proc_dsc_va.wrapping_sub(u32::from(proc_size));
         let pcode_data = map.slice_from_va(pcode_va, proc_size as usize)?;
-        let pcode_bytes = &pcode_data[..proc_size as usize];
+        let pcode_bytes = pcode_data
+            .get(..proc_size as usize)
+            .ok_or(Error::Truncated {
+                needed: proc_size as usize,
+                available: pcode_data.len(),
+            })?;
 
         // Get the constant pool base from ObjectInfo.lpConstants (+0x34)
         // ProcDscInfo+0x00 points to ObjectInfo (confirmed via ProcCallEngine_Body)
-        let obj_info_va = proc_dsc.object_info_va();
+        let obj_info_va = proc_dsc.object_info_va()?;
         let oi_data = map.slice_from_va(obj_info_va, procedure::OBJECT_INFO_MIN_SIZE)?;
-        let data_const_va = procedure::read_constants_va(oi_data);
+        let data_const_va = procedure::read_constants_va(oi_data)?;
 
         Ok(Self {
             proc_dsc,
@@ -120,14 +130,22 @@ impl<'a> PCodeMethod<'a> {
     }
 
     /// Stack frame size for local variables.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying ProcDscInfo field cannot be read.
     #[inline]
-    pub fn frame_size(&self) -> u16 {
+    pub fn frame_size(&self) -> Result<u16, Error> {
         self.proc_dsc.frame_size()
     }
 
     /// Size of the P-Code byte stream in bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying ProcDscInfo field cannot be read.
     #[inline]
-    pub fn proc_size(&self) -> u16 {
+    pub fn proc_size(&self) -> Result<u16, Error> {
         self.proc_dsc.proc_size()
     }
 
@@ -171,8 +189,30 @@ impl<'a> PCodeMethod<'a> {
     }
 
     /// Returns a streaming iterator over decoded P-Code instructions.
-    pub fn instructions(&self) -> InstructionIterator<'a> {
-        InstructionIterator::new(self.pcode_bytes, self.proc_dsc.proc_size())
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying procedure size cannot be read.
+    pub fn instructions(&self) -> Result<InstructionIterator<'a>, Error> {
+        Ok(InstructionIterator::new(
+            self.pcode_bytes,
+            self.proc_dsc.proc_size()?,
+        ))
+    }
+
+    /// Iterates the procedure's local-variable cleanup table entries.
+    ///
+    /// The cleanup table describes resource-release thunks (BSTR free,
+    /// VARIANT free, object Release) that the runtime invokes on procedure
+    /// exit and on the error path. The table is **P-Code only** —
+    /// native-compiled methods emit cleanup calls inline in their x86 code.
+    ///
+    /// This is a forwarder for [`ProcDscInfo::cleanup_entries`] kept on
+    /// [`PCodeMethod`] for ergonomic consumer access; the underlying iterator
+    /// is identical.
+    #[inline]
+    pub fn cleanup_entries(&self) -> ControlPropertyIter<'a> {
+        self.proc_dsc.cleanup_entries()
     }
 
     /// Creates a [`ConstantPool`] reader for this method's constant pool.

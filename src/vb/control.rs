@@ -8,7 +8,7 @@
 //! research. The fields below are based on cross-referencing multiple
 //! reverse engineering sources (VBDec, python-vb, Semi-VBDecompiler).
 
-use core::fmt;
+use std::fmt;
 
 use crate::{
     error::Error,
@@ -25,11 +25,9 @@ pub struct Guid {
 impl Guid {
     /// Parses a GUID from a 16-byte slice.
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 16 {
-            return None;
-        }
+        let slice = data.get(..16)?;
         let mut bytes = [0u8; 16];
-        bytes.copy_from_slice(&data[..16]);
+        bytes.copy_from_slice(slice);
         Some(Self { bytes })
     }
 
@@ -55,13 +53,32 @@ impl fmt::Debug for Guid {
 impl fmt::Display for Guid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let b = &self.bytes;
-        let d1 = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-        let d2 = u16::from_le_bytes([b[4], b[5]]);
-        let d3 = u16::from_le_bytes([b[6], b[7]]);
+        // Destructure the fixed 16-byte array to avoid lint indexing warnings.
+        let &[
+            b0,
+            b1,
+            b2,
+            b3,
+            b4,
+            b5,
+            b6,
+            b7,
+            b8,
+            b9,
+            b10,
+            b11,
+            b12,
+            b13,
+            b14,
+            b15,
+        ] = b;
+        let d1 = u32::from_le_bytes([b0, b1, b2, b3]);
+        let d2 = u16::from_le_bytes([b4, b5]);
+        let d3 = u16::from_le_bytes([b6, b7]);
         write!(
             f,
             "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
-            d1, d2, d3, b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+            d1, d2, d3, b8, b9, b10, b11, b12, b13, b14, b15
         )
     }
 }
@@ -142,16 +159,12 @@ impl<'a> ControlInfo<'a> {
     ///
     /// Returns [`Error::TooShort`] if `data.len() < 0x28`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::MIN_SIZE {
-            return Err(Error::TooShort {
-                expected: Self::MIN_SIZE,
-                actual: data.len(),
-                context: "ControlInfo",
-            });
-        }
-        Ok(Self {
-            bytes: &data[..Self::MIN_SIZE],
-        })
+        let bytes = data.get(..Self::MIN_SIZE).ok_or(Error::TooShort {
+            expected: Self::MIN_SIZE,
+            actual: data.len(),
+            context: "ControlInfo",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Control flags at offset 0x00 (u16, always 0x0040 in compiled binaries).
@@ -163,7 +176,7 @@ impl<'a> ControlInfo<'a> {
     /// indicating a compiled control entry; other values may exist in IDE/debug
     /// contexts but are irrelevant for static analysis of compiled binaries.
     #[inline]
-    pub fn flags(&self) -> u16 {
+    pub fn flags(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
@@ -172,13 +185,13 @@ impl<'a> ControlInfo<'a> {
     /// Varies by control type (e.g., PictureBox=20, TextBox=24, Menu=15,
     /// CheckBox=1, OptionButton=31).
     #[inline]
-    pub fn event_handler_slots(&self) -> u16 {
+    pub fn event_handler_slots(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x02)
     }
 
     /// Control type flags at offset 0x00 (u32 view of flags + event_handler_slots).
     #[inline]
-    pub fn control_type(&self) -> u32 {
+    pub fn control_type(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
@@ -189,13 +202,13 @@ impl<'a> ControlInfo<'a> {
     /// in the same form (e.g., 60, 64, 68, 72...), with each control
     /// occupying one 4-byte slot.
     #[inline]
-    pub fn dispatch_offset(&self) -> u16 {
+    pub fn dispatch_offset(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x04)
     }
 
     /// VA of the control's 16-byte CLSID at offset 0x08.
     #[inline]
-    pub fn guid_va(&self) -> u32 {
+    pub fn guid_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
@@ -204,7 +217,7 @@ impl<'a> ControlInfo<'a> {
     /// Corresponds to the control's Name property index in the VB6 IDE.
     /// Value 0xFFFF indicates the form's default/implicit control.
     #[inline]
-    pub fn index(&self) -> u16 {
+    pub fn index(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x0C)
     }
 
@@ -216,7 +229,7 @@ impl<'a> ControlInfo<'a> {
     /// word of the packed [`control_id`](Self::control_id) at +0x24 for hash
     /// lookup in `ControlNameHashLookup`.
     #[inline]
-    pub fn member_type(&self) -> u16 {
+    pub fn member_type(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x0E)
     }
 
@@ -226,7 +239,7 @@ impl<'a> ControlInfo<'a> {
     /// At runtime: the low u16 is the number of entries in the DISPID dispatch
     /// table, used by `EVENT_SINK_Invoke_Inner` for event handler resolution.
     #[inline]
-    pub fn dispid_count_or_zero(&self) -> u32 {
+    pub fn dispid_count_or_zero(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x10)
     }
 
@@ -237,7 +250,7 @@ impl<'a> ControlInfo<'a> {
     /// pairs. `EVENT_SINK_Invoke_Inner` walks this table to find the handler
     /// for a given COM DISPID.
     #[inline]
-    pub fn dispid_table_va(&self) -> u32 {
+    pub fn dispid_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x14)
     }
 
@@ -260,7 +273,7 @@ impl<'a> ControlInfo<'a> {
     /// On disk, the event handler VAs are typically zero (populated at
     /// runtime when event handlers are connected to controls).
     #[inline]
-    pub fn event_sink_vtable_va(&self) -> u32 {
+    pub fn event_sink_vtable_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x18)
     }
 
@@ -270,7 +283,7 @@ impl<'a> ControlInfo<'a> {
     /// property from the VB6 IDE, e.g., "Command1", "Timer1").
     /// The name is stored in a shared data region alongside control CLSIDs.
     #[inline]
-    pub fn name_va(&self) -> u32 {
+    pub fn name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x20)
     }
 
@@ -281,7 +294,7 @@ impl<'a> ControlInfo<'a> {
     /// Not a valid VA within the PE image. In memory dumps, this field
     /// may be overwritten by the runtime.
     #[inline]
-    pub fn linker_type_data_va(&self) -> u32 {
+    pub fn linker_type_data_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x1C)
     }
 
@@ -291,7 +304,7 @@ impl<'a> ControlInfo<'a> {
     /// `ControlNameHashLookup` in the runtime. The value 0xFFFFFFFF
     /// indicates the form's default/implicit control.
     #[inline]
-    pub fn control_id(&self) -> u32 {
+    pub fn control_id(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 }
@@ -333,9 +346,17 @@ impl<'a> Iterator for ControlIterator<'a> {
         if self.remaining == 0 {
             return None;
         }
-        self.remaining -= 1;
+        self.remaining = self.remaining.checked_sub(1)?;
 
-        if self.offset + ControlInfo::MIN_SIZE > self.data.len() {
+        let entry_end = match self.offset.checked_add(ControlInfo::MIN_SIZE) {
+            Some(e) => e,
+            None => {
+                return Some(Err(Error::ArithmeticOverflow {
+                    context: "ControlIterator offset+MIN_SIZE",
+                }));
+            }
+        };
+        if entry_end > self.data.len() {
             return Some(Err(Error::TooShort {
                 expected: ControlInfo::MIN_SIZE,
                 actual: self.data.len().saturating_sub(self.offset),
@@ -343,9 +364,18 @@ impl<'a> Iterator for ControlIterator<'a> {
             }));
         }
 
-        match ControlInfo::parse(&self.data[self.offset..]) {
+        let slice = match self.data.get(self.offset..) {
+            Some(s) => s,
+            None => {
+                return Some(Err(Error::Truncated {
+                    needed: ControlInfo::MIN_SIZE,
+                    available: self.data.len().saturating_sub(self.offset),
+                }));
+            }
+        };
+        match ControlInfo::parse(slice) {
             Ok(ctrl) => {
-                self.offset += ControlInfo::MIN_SIZE;
+                self.offset = entry_end;
                 Some(Ok(ctrl))
             }
             Err(e) => Some(Err(e)),
@@ -374,15 +404,15 @@ mod tests {
     fn test_parse_valid() {
         let data = make_control_info();
         let ctrl = ControlInfo::parse(&data).unwrap();
-        assert_eq!(ctrl.flags(), 0x0040);
-        assert_eq!(ctrl.event_handler_slots(), 0x0014);
-        assert_eq!(ctrl.control_type(), 0x00140040);
-        assert_eq!(ctrl.dispatch_offset(), 52);
-        assert_eq!(ctrl.guid_va(), 0x00405000);
-        assert_eq!(ctrl.index(), 1);
-        assert_eq!(ctrl.member_type(), 3);
-        assert_eq!(ctrl.dispid_count_or_zero(), 0x00406000);
-        assert_eq!(ctrl.name_va(), 0x00407000);
+        assert_eq!(ctrl.flags().unwrap(), 0x0040);
+        assert_eq!(ctrl.event_handler_slots().unwrap(), 0x0014);
+        assert_eq!(ctrl.control_type().unwrap(), 0x00140040);
+        assert_eq!(ctrl.dispatch_offset().unwrap(), 52);
+        assert_eq!(ctrl.guid_va().unwrap(), 0x00405000);
+        assert_eq!(ctrl.index().unwrap(), 1);
+        assert_eq!(ctrl.member_type().unwrap(), 3);
+        assert_eq!(ctrl.dispid_count_or_zero().unwrap(), 0x00406000);
+        assert_eq!(ctrl.name_va().unwrap(), 0x00407000);
     }
 
     #[test]
@@ -405,8 +435,8 @@ mod tests {
         let iter = ControlIterator::new(&data, 2);
         let results: Vec<_> = iter.collect();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].as_ref().unwrap().index(), 1);
-        assert_eq!(results[1].as_ref().unwrap().index(), 2);
+        assert_eq!(results[0].as_ref().unwrap().index().unwrap(), 1);
+        assert_eq!(results[1].as_ref().unwrap().index().unwrap(), 2);
     }
 
     #[test]

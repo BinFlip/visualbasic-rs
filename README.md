@@ -9,25 +9,40 @@ bytecode instructions.
 ## Quick start
 
 ```rust
-use visualbasic::VbProject;
+use visualbasic::{VbProject, RecognitionFailure};
 
-let file_bytes = std::fs::read("sample.exe").unwrap();
-let project = VbProject::from_bytes(&file_bytes).unwrap();
+let file_bytes = std::fs::read("sample.exe")?;
 
-println!("Project: {:?}", project.project_name());
-println!("Objects: {}", project.object_count());
+let project = match VbProject::from_bytes(&file_bytes) {
+    Ok(p) => p,
+    Err(e) => match e.recognition_failure() {
+        Some(RecognitionFailure::NotRecognized | RecognitionFailure::UnrecognizedFormat) => {
+            // Quietly skip non-VB6 files.
+            return Ok(());
+        }
+        Some(RecognitionFailure::TruncatedContainer) => {
+            eprintln!("warn: looks VB6 but truncated: {e}");
+            return Ok(());
+        }
+        _ => return Err(e.into()),
+    },
+};
 
-for obj in project.objects() {
-    let obj = obj.unwrap();
-    println!("  {} ({})", String::from_utf8_lossy(obj.name().unwrap()), obj.object_kind());
+println!("Project: {}", project.project_name()?);
+println!("Objects: {}", project.object_count()?);
 
-    for method in obj.pcode_methods() {
-        let method = method.unwrap();
-        for insn in method.instructions() {
-            println!("    {}", insn.unwrap());
+for obj in project.objects()? {
+    let obj = obj?;
+    println!("  {} ({})", obj.name()?, obj.object_kind()?);
+
+    for method in obj.pcode_methods()? {
+        let method = method?;
+        for insn in method.instructions()? {
+            println!("    {}", insn?);
         }
     }
 }
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ## What it parses
@@ -40,6 +55,29 @@ for obj in project.objects() {
 - **COM metadata**: GUIDs, TypeLib registration, external component tables
 - **Form binary data**: control trees, property streams, font/picture resources
 - **MSVBVM60.DLL exports**: 169 runtime function signatures with parameter types
+
+## High-level walkers
+
+For consumer code that wants a single tagged stream rather than walking
+each substructure by hand:
+
+- [`VbProject::code_entrypoints()`] — every code VA in the project
+  (P-Code stubs, native procs, native thunks, event handlers, `Sub Main`)
+  in one `Vec<CodeEntrypoint>`.
+- [`VbObject::events()`] — joined `(control, event_slot, handler_va)`
+  bindings for a form, with per-control-type event-name resolution.
+- [`VbProject::gui_entries_with_form_data()`] — pairs each GUI table
+  entry with its parsed form binary in one iterator.
+- [`VbProject::compilation_mode()`] — distinguishes `Pcode` / `Native` /
+  `Mixed` binaries (combines the project flag with a per-object scan).
+- [`VbProject::diagnostics()`] — eager parse-health probe surfacing
+  missing optional structures and known-anomaly patterns.
+
+## Cargo features
+
+| Feature | Default | Effect |
+|---|---|---|
+| `tracing` | off | Emits structured `tracing::warn!` events at silent fail-soft sites. No effect when disabled — the helpers compile to no-ops. |
 
 ## Example tool
 

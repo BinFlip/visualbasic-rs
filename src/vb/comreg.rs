@@ -13,7 +13,7 @@
 //! - MSVBVM60.DLL `sub_66030AC0` (COM registration orchestrator)
 //! - MSVBVM60.DLL `sub_660BC263` (per-object CLSID/ProgID registration)
 
-use core::str;
+use std::str;
 
 use crate::{
     addressmap::AddressMap,
@@ -70,13 +70,13 @@ impl<'a> ComRegData<'a> {
     /// Returns 0 if there are no COM objects to register (common for EXE
     /// files; ActiveX DLLs/OCXs will have non-zero offsets).
     #[inline]
-    pub fn first_object_offset(&self) -> u32 {
+    pub fn first_object_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// Self-relative offset to the project name string.
     #[inline]
-    pub fn project_name_offset(&self) -> u32 {
+    pub fn project_name_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
@@ -84,7 +84,7 @@ impl<'a> ComRegData<'a> {
     ///
     /// Used by the compiler for the `\HELPDIR = ...` registry entry.
     #[inline]
-    pub fn help_dir_offset(&self) -> u32 {
+    pub fn help_dir_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
@@ -92,18 +92,18 @@ impl<'a> ComRegData<'a> {
     ///
     /// Used by the compiler for the `APPDESCRIPTION=...` entry.
     #[inline]
-    pub fn description_offset(&self) -> u32 {
+    pub fn description_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
     /// Project/TypeLib GUID at offset 0x10.
     pub fn project_guid(&self) -> Option<Guid> {
-        Guid::from_bytes(&self.bytes[0x10..0x20])
+        Guid::from_bytes(self.bytes.get(0x10..0x20)?)
     }
 
     /// TypeLib locale ID at offset 0x20.
     #[inline]
-    pub fn lcid(&self) -> u32 {
+    pub fn lcid(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x20)
     }
 
@@ -118,30 +118,32 @@ impl<'a> ComRegData<'a> {
     /// | 0x02 | `LIBFLAG_FCONTROL` | Library describes controls |
     /// | 0x04 | `LIBFLAG_FHIDDEN` | Library should not be displayed |
     #[inline]
-    pub fn reg_flags(&self) -> u16 {
+    pub fn reg_flags(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x24)
     }
 
     /// TypeLib major version at offset 0x26.
     #[inline]
-    pub fn major_version(&self) -> u16 {
+    pub fn major_version(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x26)
     }
 
     /// TypeLib minor version at offset 0x28.
     #[inline]
-    pub fn minor_version(&self) -> u16 {
+    pub fn minor_version(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x28)
     }
 
     /// Reads the project name string (resolved from self-relative offset).
     pub fn project_name(&self, map: &AddressMap<'a>) -> Option<&'a str> {
-        let off = self.project_name_offset();
+        let off = self.project_name_offset().ok()?;
         if off == 0 {
             return None;
         }
-        let data = map.slice_from_va(self.base_va + off, 256).ok()?;
-        let name = read_cstr(data, 0);
+        let data = map
+            .slice_from_va(self.base_va.wrapping_add(off), 256)
+            .ok()?;
+        let name = read_cstr(data, 0).ok()?;
         if name.is_empty() {
             return None;
         }
@@ -152,12 +154,14 @@ impl<'a> ComRegData<'a> {
     ///
     /// This is the HELPDIR value used for TypeLib registration.
     pub fn help_dir(&self, map: &AddressMap<'a>) -> Option<&'a str> {
-        let off = self.help_dir_offset();
+        let off = self.help_dir_offset().ok()?;
         if off == 0 {
             return None;
         }
-        let data = map.slice_from_va(self.base_va + off, 256).ok()?;
-        let name = read_cstr(data, 0);
+        let data = map
+            .slice_from_va(self.base_va.wrapping_add(off), 256)
+            .ok()?;
+        let name = read_cstr(data, 0).ok()?;
         if name.is_empty() {
             return None;
         }
@@ -179,76 +183,86 @@ impl<'a> ComRegData<'a> {
     ///
     /// This method scans all self-relative offsets to find the highest
     /// referenced address and returns the total size from the base.
-    pub fn total_size(&self, map: &AddressMap<'a>) -> usize {
+    pub fn total_size(&self, map: &AddressMap<'a>) -> Result<usize, Error> {
         let mut max_end = Self::HEADER_SIZE as u32;
 
         // ComRegData string offsets
         for off in [
-            self.project_name_offset(),
-            self.help_dir_offset(),
-            self.description_offset(),
+            self.project_name_offset()?,
+            self.help_dir_offset()?,
+            self.description_offset()?,
         ] {
             if off != 0 {
                 // Read the string to determine its length
                 let str_end = map
-                    .slice_from_va(self.base_va + off, 256)
+                    .slice_from_va(self.base_va.wrapping_add(off), 256)
                     .ok()
                     .map(|d| {
-                        let len = d.iter().position(|&b| b == 0).unwrap_or(0);
-                        off + len as u32 + 1
+                        let len = d.iter().position(|&b| b == 0).unwrap_or(0) as u32;
+                        off.wrapping_add(len).wrapping_add(1)
                     })
-                    .unwrap_or(off + 1);
+                    .unwrap_or(off.wrapping_add(1));
                 max_end = max_end.max(str_end);
             }
         }
 
         // Walk ComRegObject records
-        for obj in self.objects(map) {
-            let obj_end = (obj.va() - self.base_va) + ComRegObject::SIZE as u32;
+        for obj in self.objects(map)? {
+            let obj_end = obj
+                .va()
+                .wrapping_sub(self.base_va)
+                .wrapping_add(ComRegObject::SIZE as u32);
             max_end = max_end.max(obj_end);
 
             // Object strings
-            for off in [obj.object_name_offset(), obj.description_offset()] {
+            for off in [obj.object_name_offset()?, obj.description_offset()?] {
                 if off != 0 {
                     let str_end = map
-                        .slice_from_va(self.base_va + off, 256)
+                        .slice_from_va(self.base_va.wrapping_add(off), 256)
                         .ok()
                         .map(|d| {
-                            let len = d.iter().position(|&b| b == 0).unwrap_or(0);
-                            off + len as u32 + 1
+                            let len = d.iter().position(|&b| b == 0).unwrap_or(0) as u32;
+                            off.wrapping_add(len).wrapping_add(1)
                         })
-                        .unwrap_or(off + 1);
+                        .unwrap_or(off.wrapping_add(1));
                     max_end = max_end.max(str_end);
                 }
             }
 
             // GUID arrays
-            let di_off = obj.default_iface_guids_offset();
+            let di_off = obj.default_iface_guids_offset()?;
             if di_off != 0 {
-                max_end = max_end.max(di_off + obj.default_iface_count() * 16);
+                max_end =
+                    max_end.max(di_off.wrapping_add(obj.default_iface_count()?.wrapping_mul(16)));
             }
-            let si_off = obj.source_iface_guids_offset();
+            let si_off = obj.source_iface_guids_offset()?;
             if si_off != 0 {
-                max_end = max_end.max(si_off + obj.source_iface_count() * 16);
+                max_end =
+                    max_end.max(si_off.wrapping_add(obj.source_iface_count()?.wrapping_mul(16)));
             }
         }
 
-        max_end as usize
+        Ok(max_end as usize)
     }
 
     /// Returns `true` if there are per-object COM registration records.
     #[inline]
-    pub fn has_objects(&self) -> bool {
-        self.first_object_offset() != 0
+    pub fn has_objects(&self) -> Result<bool, Error> {
+        Ok(self.first_object_offset()? != 0)
     }
 
     /// Returns an iterator over per-object COM registration records.
-    pub fn objects(&self, map: &'a AddressMap<'a>) -> ComRegObjectIter<'a> {
-        ComRegObjectIter {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the first-object offset header field cannot be
+    /// read from the backing buffer.
+    pub fn objects(&self, map: &'a AddressMap<'a>) -> Result<ComRegObjectIter<'a>, Error> {
+        Ok(ComRegObjectIter {
             map,
             base_va: self.base_va,
-            next_offset: self.first_object_offset(),
-        }
+            next_offset: self.first_object_offset()?,
+        })
     }
 }
 
@@ -320,30 +334,32 @@ impl<'a> ComRegObject<'a> {
 
     /// Self-relative offset to next record (0 = last).
     #[inline]
-    pub fn next_offset(&self) -> u32 {
+    pub fn next_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// Self-relative offset to the object name string at +0x04.
     #[inline]
-    pub fn object_name_offset(&self) -> u32 {
+    pub fn object_name_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
     /// Self-relative offset to the description string at +0x08.
     #[inline]
-    pub fn description_offset(&self) -> u32 {
+    pub fn description_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
     /// Reads the object/class name (second component of ProgID = `Project.ClassName`).
     pub fn object_name(&self, map: &AddressMap<'a>) -> Option<&'a str> {
-        let off = self.object_name_offset();
+        let off = self.object_name_offset().ok()?;
         if off == 0 {
             return None;
         }
-        let data = map.slice_from_va(self.base_va + off, 256).ok()?;
-        let name = read_cstr(data, 0);
+        let data = map
+            .slice_from_va(self.base_va.wrapping_add(off), 256)
+            .ok()?;
+        let name = read_cstr(data, 0).ok()?;
         if name.is_empty() {
             return None;
         }
@@ -352,12 +368,14 @@ impl<'a> ComRegObject<'a> {
 
     /// Reads the description/display name string.
     pub fn description(&self, map: &AddressMap<'a>) -> Option<&'a str> {
-        let off = self.description_offset();
+        let off = self.description_offset().ok()?;
         if off == 0 {
             return None;
         }
-        let data = map.slice_from_va(self.base_va + off, 256).ok()?;
-        let name = read_cstr(data, 0);
+        let data = map
+            .slice_from_va(self.base_va.wrapping_add(off), 256)
+            .ok()?;
+        let name = read_cstr(data, 0).ok()?;
         if name.is_empty() {
             return None;
         }
@@ -369,18 +387,18 @@ impl<'a> ComRegObject<'a> {
     /// Non-zero = create `InprocServer32`/`LocalServer32` subkey.
     /// Zero = delete the server subkey (unregistration).
     #[inline]
-    pub fn reg_flag(&self) -> u32 {
+    pub fn reg_flag(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
     /// Object CLSID at offset 0x14 (16-byte GUID).
     pub fn clsid(&self) -> Option<Guid> {
-        Guid::from_bytes(&self.bytes[0x14..0x24])
+        Guid::from_bytes(self.bytes.get(0x14..0x24)?)
     }
 
     /// Number of default interface GUIDs at offset 0x24.
     #[inline]
-    pub fn default_iface_count(&self) -> u32 {
+    pub fn default_iface_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 
@@ -389,19 +407,19 @@ impl<'a> ComRegObject<'a> {
     /// Each entry is a 16-byte GUID. Use [`default_iface_count`](Self::default_iface_count)
     /// for the array length.
     #[inline]
-    pub fn default_iface_guids_offset(&self) -> u32 {
+    pub fn default_iface_guids_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x28)
     }
 
     /// Self-relative offset to the source/event interface GUID array at offset 0x2C.
     #[inline]
-    pub fn source_iface_guids_offset(&self) -> u32 {
+    pub fn source_iface_guids_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x2C)
     }
 
     /// Number of source/event interface GUIDs at offset 0x30.
     #[inline]
-    pub fn source_iface_count(&self) -> u32 {
+    pub fn source_iface_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x30)
     }
 
@@ -409,7 +427,7 @@ impl<'a> ComRegObject<'a> {
     ///
     /// Written as decimal to `CLSID\{...}\MiscStatus\1` registry key.
     #[inline]
-    pub fn misc_status(&self) -> u32 {
+    pub fn misc_status(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x34)
     }
 
@@ -431,7 +449,7 @@ impl<'a> ComRegObject<'a> {
     /// - `0x00B2` (bits 1,4,5,7): Automatable — `ProgID`, `TypeLib`, `VERSION`, interface registration
     /// - `0x00A0` (bits 5,7): Control or DocObject — `MiscStatus`, `MiscStatus\1`
     #[inline]
-    pub fn object_flags(&self) -> u16 {
+    pub fn object_flags(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x38)
     }
 
@@ -439,7 +457,7 @@ impl<'a> ComRegObject<'a> {
     ///
     /// Written as `"module.dll, <id>"` to the `ToolboxBitmap32` subkey.
     #[inline]
-    pub fn toolbox_bitmap_id(&self) -> u16 {
+    pub fn toolbox_bitmap_id(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x3A)
     }
 
@@ -447,7 +465,7 @@ impl<'a> ComRegObject<'a> {
     ///
     /// Written as `"module.dll, <id>"` to the `DefaultIcon` subkey.
     #[inline]
-    pub fn default_icon_id(&self) -> u16 {
+    pub fn default_icon_id(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x3C)
     }
 
@@ -455,57 +473,69 @@ impl<'a> ComRegObject<'a> {
     ///
     /// Bit 0 = has designer data at +0x40 (only if `VBHeader+0x22 >= 8`).
     #[inline]
-    pub fn extended_flags(&self) -> u16 {
+    pub fn extended_flags(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x3E)
     }
 
     /// Returns `true` if this is marked as a Control (flag bit 5).
     #[inline]
-    pub fn is_control(&self) -> bool {
-        self.object_flags() & 0x0020 != 0
+    pub fn is_control(&self) -> Result<bool, Error> {
+        Ok(self.object_flags()? & 0x0020 != 0)
     }
 
     /// Returns `true` if this is a DocObject (flag bit 7).
     #[inline]
-    pub fn is_doc_object(&self) -> bool {
-        self.object_flags() & 0x0080 != 0
+    pub fn is_doc_object(&self) -> Result<bool, Error> {
+        Ok(self.object_flags()? & 0x0080 != 0)
     }
 
     /// Returns `true` if this object registers a ProgID and interfaces (flags & 0xB2).
     #[inline]
-    pub fn is_automatable(&self) -> bool {
-        self.object_flags() & 0x00B2 != 0
+    pub fn is_automatable(&self) -> Result<bool, Error> {
+        Ok(self.object_flags()? & 0x00B2 != 0)
     }
 
     /// Reads default interface GUIDs from the GUID array.
-    pub fn default_iface_guids(&self, map: &AddressMap<'a>) -> Vec<Guid> {
-        self.read_guid_array(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count or offset header fields cannot be read.
+    pub fn default_iface_guids(&self, map: &AddressMap<'a>) -> Result<Vec<Guid>, Error> {
+        Ok(self.read_guid_array(
             map,
-            self.default_iface_guids_offset(),
-            self.default_iface_count(),
-        )
+            self.default_iface_guids_offset()?,
+            self.default_iface_count()?,
+        ))
     }
 
     /// Reads source/event interface GUIDs from the GUID array.
-    pub fn source_iface_guids(&self, map: &AddressMap<'a>) -> Vec<Guid> {
-        self.read_guid_array(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count or offset header fields cannot be read.
+    pub fn source_iface_guids(&self, map: &AddressMap<'a>) -> Result<Vec<Guid>, Error> {
+        Ok(self.read_guid_array(
             map,
-            self.source_iface_guids_offset(),
-            self.source_iface_count(),
-        )
+            self.source_iface_guids_offset()?,
+            self.source_iface_count()?,
+        ))
     }
 
     fn read_guid_array(&self, map: &AddressMap<'a>, offset: u32, count: u32) -> Vec<Guid> {
         if offset == 0 || count == 0 {
             return Vec::new();
         }
-        let va = self.base_va + offset;
-        let size = count as usize * 16;
+        let va = self.base_va.wrapping_add(offset);
+        let size = (count as usize).saturating_mul(16);
         let Ok(data) = map.slice_from_va(va, size) else {
             return Vec::new();
         };
         (0..count as usize)
-            .filter_map(|i| Guid::from_bytes(&data[i * 16..(i + 1) * 16]))
+            .filter_map(|i| {
+                let start = i.saturating_mul(16);
+                let end = start.saturating_add(16);
+                Guid::from_bytes(data.get(start..end)?)
+            })
             .collect()
     }
 }
@@ -525,10 +555,10 @@ impl<'a> Iterator for ComRegObjectIter<'a> {
         if self.next_offset == 0 {
             return None;
         }
-        let va = self.base_va + self.next_offset;
+        let va = self.base_va.wrapping_add(self.next_offset);
         let data = self.map.slice_from_va(va, ComRegObject::SIZE).ok()?;
         let obj = ComRegObject::parse(data, self.base_va, va).ok()?;
-        self.next_offset = obj.next_offset();
+        self.next_offset = obj.next_offset().ok()?;
         Some(obj)
     }
 }
@@ -551,9 +581,9 @@ mod tests {
         // major version = 1
         data[0x26..0x28].copy_from_slice(&1u16.to_le_bytes());
         let reg = ComRegData::parse(&data, 0x00401000).unwrap();
-        assert!(!reg.has_objects());
-        assert_eq!(reg.major_version(), 1);
-        assert_eq!(reg.minor_version(), 0);
+        assert!(!reg.has_objects().unwrap());
+        assert_eq!(reg.major_version().unwrap(), 1);
+        assert_eq!(reg.minor_version().unwrap(), 0);
         assert!(reg.project_guid().is_some());
     }
 

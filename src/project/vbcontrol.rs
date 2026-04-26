@@ -8,6 +8,8 @@
 //! [`VbControl`] wraps a raw `ControlInfo` with resolved name, GUID, class
 //! identification, and event handler VAs for convenient access.
 
+use std::borrow::Cow;
+
 use crate::{
     addressmap::AddressMap,
     error::Error,
@@ -50,15 +52,30 @@ impl<'a> VbControl<'a> {
         &self.info
     }
 
-    /// The control's name (e.g., `"Command1"`, `"txtName"`).
+    /// The control's name as a lossy UTF-8 string (e.g., `"Command1"`,
+    /// `"txtName"`).
+    ///
+    /// Borrows when the underlying bytes are already valid UTF-8 (the
+    /// common case). Use [`name_bytes`](Self::name_bytes) for the raw
+    /// bytes.
     #[inline]
-    pub fn name(&self) -> &'a [u8] {
+    pub fn name(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.name)
+    }
+
+    /// The control's name as raw bytes from the PE image.
+    #[inline]
+    pub fn name_bytes(&self) -> &'a [u8] {
         self.name
     }
 
     /// Control type flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying ControlInfo field cannot be read.
     #[inline]
-    pub fn control_type(&self) -> u32 {
+    pub fn control_type(&self) -> Result<u32, Error> {
         self.info.control_type()
     }
 
@@ -66,14 +83,22 @@ impl<'a> VbControl<'a> {
     ///
     /// This is the number of entries in the event sink vtable at +0x18,
     /// NOT the dispatch_offset at +0x04 (which is a byte offset, not a count).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying ControlInfo field cannot be read.
     #[inline]
-    pub fn event_count(&self) -> u16 {
+    pub fn event_count(&self) -> Result<u16, Error> {
         self.info.event_handler_slots()
     }
 
     /// Control index within the form.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying ControlInfo field cannot be read.
     #[inline]
-    pub fn index(&self) -> u16 {
+    pub fn index(&self) -> Result<u16, Error> {
         self.info.index()
     }
 
@@ -111,11 +136,12 @@ impl<'a> VbControl<'a> {
     /// A return value of `0` means the event is not handled.
     /// A non-zero VA points to the handler stub (P-Code or native).
     pub fn event_handler_va(&self, event_index: u16) -> Option<u32> {
-        let offset = event_index as usize * 4;
-        if offset + 4 > self.event_handler_vas.len() {
+        let offset = (event_index as usize).checked_mul(4)?;
+        let end = offset.checked_add(4)?;
+        if end > self.event_handler_vas.len() {
             return None;
         }
-        Some(read_u32_le(self.event_handler_vas, offset))
+        read_u32_le(self.event_handler_vas, offset).ok()
     }
 
     /// Resolves and returns the control's [`EventSinkVtable`].
@@ -124,25 +150,29 @@ impl<'a> VbControl<'a> {
     /// and per-event handler VAs. Returns `None` if the vtable VA is
     /// null or cannot be resolved.
     pub fn event_sink<'p>(&self, map: &'p AddressMap<'a>) -> Option<EventSinkVtable<'a>> {
-        let va = self.info.event_sink_vtable_va();
+        let va = self.info.event_sink_vtable_va().ok()?;
         if va == 0 {
             return None;
         }
-        let slots = self.info.event_handler_slots();
-        let size = EventSinkVtable::HEADER_SIZE + slots as usize * 4;
+        let slots = self.info.event_handler_slots().ok()?;
+        let size = EventSinkVtable::HEADER_SIZE.checked_add((slots as usize).checked_mul(4)?)?;
         let data = map.slice_from_va(va, size).ok()?;
         EventSinkVtable::parse(data, slots).ok()
     }
 
     /// Returns the number of events with handler VAs connected.
-    pub fn connected_event_count(&self) -> u16 {
-        let mut count = 0;
-        for i in 0..self.event_count() {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the event handler slot count cannot be read.
+    pub fn connected_event_count(&self) -> Result<u16, Error> {
+        let mut count: u16 = 0;
+        for i in 0..self.event_count()? {
             if self.event_handler_va(i).is_some_and(|va| va != 0) {
-                count += 1;
+                count = count.saturating_add(1);
             }
         }
-        count
+        Ok(count)
     }
 }
 
@@ -200,9 +230,9 @@ impl<'a, 'p> Iterator for ControlEntryIterator<'a, 'p> {
             return None;
         }
 
-        let offset = self.index * ControlInfo::MIN_SIZE as u32;
+        let offset = self.index.saturating_mul(ControlInfo::MIN_SIZE as u32);
         let entry_va = self.controls_va.wrapping_add(offset);
-        self.index += 1;
+        self.index = self.index.saturating_add(1);
 
         let data = match self.map.slice_from_va(entry_va, ControlInfo::MIN_SIZE) {
             Ok(d) => d,
@@ -214,38 +244,59 @@ impl<'a, 'p> Iterator for ControlEntryIterator<'a, 'p> {
             Err(e) => return Some(Err(e)),
         };
 
-        let name = if info.name_va() != 0 {
-            let off = match self.map.va_to_offset(info.name_va()) {
+        let name_va = match info.name_va() {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let name: &[u8] = if name_va != 0 {
+            let off = match self.map.va_to_offset(name_va) {
                 Ok(o) => o,
                 Err(e) => return Some(Err(e)),
             };
-            read_cstr(self.map.file(), off)
+            match read_cstr(self.map.file(), off) {
+                Ok(s) => s,
+                Err(e) => return Some(Err(e)),
+            }
         } else {
             b""
         };
 
-        let guid = if info.guid_va() != 0 {
+        let guid_va = match info.guid_va() {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let guid = if guid_va != 0 {
             self.map
-                .slice_from_va(info.guid_va(), 16)
+                .slice_from_va(guid_va, 16)
                 .ok()
                 .and_then(Guid::from_bytes)
         } else {
             None
         };
 
-        let event_handler_vas =
-            if info.dispid_count_or_zero() != 0 && info.event_handler_slots() > 0 {
-                let size = info.event_handler_slots() as usize * 4;
-                self.map
-                    .slice_from_va(info.dispid_count_or_zero(), size)
-                    .unwrap_or(b"")
-            } else {
-                b""
-            };
+        let dispid_va = match info.dispid_count_or_zero() {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let slots = match info.event_handler_slots() {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let event_handler_vas: &[u8] = if dispid_va != 0 && slots > 0 {
+            let size = (slots as usize).saturating_mul(4);
+            self.map.slice_from_va(dispid_va, size).unwrap_or(b"")
+        } else {
+            b""
+        };
+
+        let info_index = match info.index() {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
 
         // Look up authoritative control type from form data
         let form_control_type = self.form_data.and_then(|fd| {
-            fd.control_by_id(info.index() as u8)
+            fd.control_by_id(info_index as u8)
                 .map(|fc| fc.control_type())
         });
 

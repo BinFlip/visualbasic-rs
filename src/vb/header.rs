@@ -74,23 +74,28 @@ impl<'a> VbHeader<'a> {
     /// - [`Error::TooShort`] if `data.len() < 0x68`.
     /// - [`Error::BadMagic`] if the first 4 bytes are not `"VB5!"`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "VbHeader",
-            });
-        }
-        let magic = [data[0], data[1], data[2], data[3]];
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "VbHeader",
+        })?;
+        let magic_slice = bytes.get(0..4).ok_or(Error::TooShort {
+            expected: 4,
+            actual: bytes.len(),
+            context: "VbHeader magic",
+        })?;
+        let magic = <[u8; 4]>::try_from(magic_slice).map_err(|_| Error::TooShort {
+            expected: 4,
+            actual: magic_slice.len(),
+            context: "VbHeader magic",
+        })?;
         if &magic != Self::MAGIC {
             return Err(Error::BadMagic {
                 expected: "VB5!",
                 got: magic,
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        Ok(Self { bytes })
     }
 
     /// Returns the raw bytes of this VBHeader.
@@ -102,42 +107,43 @@ impl<'a> VbHeader<'a> {
     /// Magic signature at offset 0x00 (always `"VB5!"`).
     #[inline]
     pub fn magic(&self) -> &'a [u8] {
-        &self.bytes[0x00..0x04]
+        // Safe: parse() validated bytes is exactly Self::SIZE (>= 4).
+        self.bytes.get(0x00..0x04).unwrap_or(&[])
     }
 
     /// Runtime build number at offset 0x04.
     #[inline]
-    pub fn runtime_build(&self) -> u16 {
+    pub fn runtime_build(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x04)
     }
 
     /// Language extension DLL name at offset 0x06 (14-byte null-padded ANSI).
     #[inline]
-    pub fn lang_dll(&self) -> &'a [u8] {
+    pub fn lang_dll(&self) -> Result<&'a [u8], Error> {
         read_fixed_cstr(self.bytes, 0x06, 14)
     }
 
     /// Secondary language DLL name at offset 0x14 (14-byte null-padded ANSI).
     #[inline]
-    pub fn sec_lang_dll(&self) -> &'a [u8] {
+    pub fn sec_lang_dll(&self) -> Result<&'a [u8], Error> {
         read_fixed_cstr(self.bytes, 0x14, 14)
     }
 
     /// Internal runtime revision at offset 0x22.
     #[inline]
-    pub fn runtime_revision(&self) -> u16 {
+    pub fn runtime_revision(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x22)
     }
 
     /// Language DLL LCID at offset 0x24.
     #[inline]
-    pub fn lcid(&self) -> u32 {
+    pub fn lcid(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 
     /// Secondary language LCID at offset 0x28.
     #[inline]
-    pub fn sec_lcid(&self) -> u32 {
+    pub fn sec_lcid(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x28)
     }
 
@@ -145,7 +151,7 @@ impl<'a> VbHeader<'a> {
     ///
     /// Zero if the project does not have a `Sub Main` entry point.
     #[inline]
-    pub fn sub_main_va(&self) -> u32 {
+    pub fn sub_main_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x2C)
     }
 
@@ -154,19 +160,19 @@ impl<'a> VbHeader<'a> {
     /// This is the most important pointer -- it leads to the rest of
     /// the VB6 structure chain.
     #[inline]
-    pub fn project_data_va(&self) -> u32 {
+    pub fn project_data_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x30)
     }
 
     /// VB control flags for control IDs < 32 at offset 0x34.
     #[inline]
-    pub fn mdl_int_ctls(&self) -> u32 {
+    pub fn mdl_int_ctls(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x34)
     }
 
     /// VB control flags for control IDs >= 32 at offset 0x38.
     #[inline]
-    pub fn mdl_int_ctls2(&self) -> u32 {
+    pub fn mdl_int_ctls2(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x38)
     }
 
@@ -174,31 +180,31 @@ impl<'a> VbHeader<'a> {
     ///
     /// See [`ThreadFlags`](super::flags::ThreadFlags) for flag values.
     #[inline]
-    pub fn thread_flags(&self) -> u32 {
+    pub fn thread_flags(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x3C)
     }
 
     /// Thread pool size at offset 0x40.
     #[inline]
-    pub fn thread_count(&self) -> u32 {
+    pub fn thread_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x40)
     }
 
     /// Number of forms at offset 0x44.
     #[inline]
-    pub fn form_count(&self) -> u16 {
+    pub fn form_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x44)
     }
 
     /// External controls count at offset 0x46.
     #[inline]
-    pub fn external_count(&self) -> u16 {
+    pub fn external_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x46)
     }
 
     /// Thunk count at offset 0x48.
     #[inline]
-    pub fn thunk_count(&self) -> u32 {
+    pub fn thunk_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x48)
     }
 
@@ -209,7 +215,7 @@ impl<'a> VbHeader<'a> {
     /// [`form_count`](Self::form_count) entries. Each entry is variable-length
     /// (first dword = self-relative offset to next entry).
     #[inline]
-    pub fn gui_table_va(&self) -> u32 {
+    pub fn gui_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x4C)
     }
 
@@ -219,7 +225,7 @@ impl<'a> VbHeader<'a> {
     /// Use [`VbProject::externals()`](crate::VbProject::externals) to iterate.
     /// Count is [`external_count`](Self::external_count).
     #[inline]
-    pub fn external_table_va(&self) -> u32 {
+    pub fn external_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x50)
     }
 
@@ -229,31 +235,31 @@ impl<'a> VbHeader<'a> {
     /// containing the project's TypeLib GUID, version, and a linked list of
     /// per-object [`ComRegObject`](super::comreg::ComRegObject) records.
     #[inline]
-    pub fn com_register_data_va(&self) -> u32 {
+    pub fn com_register_data_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x54)
     }
 
     /// Project description string offset at offset 0x58.
     #[inline]
-    pub fn project_description_offset(&self) -> u32 {
+    pub fn project_description_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x58)
     }
 
     /// Project EXE name string offset at offset 0x5C.
     #[inline]
-    pub fn project_exe_name_offset(&self) -> u32 {
+    pub fn project_exe_name_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x5C)
     }
 
     /// Project help file path string offset at offset 0x60.
     #[inline]
-    pub fn project_help_file_offset(&self) -> u32 {
+    pub fn project_help_file_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x60)
     }
 
     /// Project name string offset at offset 0x64.
     #[inline]
-    pub fn project_name_offset(&self) -> u32 {
+    pub fn project_name_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x64)
     }
 }
@@ -293,15 +299,15 @@ mod tests {
         let data = make_vb_header();
         let hdr = VbHeader::parse(&data).unwrap();
         assert_eq!(hdr.magic(), b"VB5!");
-        assert_eq!(hdr.runtime_build(), 9848);
-        assert_eq!(hdr.lang_dll(), b"VB6EN.DLL");
-        assert_eq!(hdr.runtime_revision(), 9);
-        assert_eq!(hdr.lcid(), 0x0409);
-        assert_eq!(hdr.project_data_va(), 0x00401234);
-        assert_eq!(hdr.thread_flags(), 0x01);
-        assert_eq!(hdr.form_count(), 3);
-        assert_eq!(hdr.external_count(), 2);
-        assert_eq!(hdr.project_name_offset(), 0x00405678);
+        assert_eq!(hdr.runtime_build().unwrap(), 9848);
+        assert_eq!(hdr.lang_dll().unwrap(), b"VB6EN.DLL");
+        assert_eq!(hdr.runtime_revision().unwrap(), 9);
+        assert_eq!(hdr.lcid().unwrap(), 0x0409);
+        assert_eq!(hdr.project_data_va().unwrap(), 0x00401234);
+        assert_eq!(hdr.thread_flags().unwrap(), 0x01);
+        assert_eq!(hdr.form_count().unwrap(), 3);
+        assert_eq!(hdr.external_count().unwrap(), 2);
+        assert_eq!(hdr.project_name_offset().unwrap(), 0x00405678);
     }
 
     #[test]
@@ -343,19 +349,19 @@ mod tests {
         let mut data = vec![0u8; VbHeader::SIZE];
         data[0..4].copy_from_slice(b"VB5!");
         let hdr = VbHeader::parse(&data).unwrap();
-        assert_eq!(hdr.sub_main_va(), 0);
-        assert_eq!(hdr.sec_lcid(), 0);
-        assert_eq!(hdr.sec_lang_dll(), b"");
-        assert_eq!(hdr.thread_count(), 0);
-        assert_eq!(hdr.thunk_count(), 0);
-        assert_eq!(hdr.gui_table_va(), 0);
-        assert_eq!(hdr.external_table_va(), 0);
-        assert_eq!(hdr.com_register_data_va(), 0);
-        assert_eq!(hdr.project_description_offset(), 0);
-        assert_eq!(hdr.project_exe_name_offset(), 0);
-        assert_eq!(hdr.project_help_file_offset(), 0);
-        assert_eq!(hdr.mdl_int_ctls(), 0);
-        assert_eq!(hdr.mdl_int_ctls2(), 0);
+        assert_eq!(hdr.sub_main_va().unwrap(), 0);
+        assert_eq!(hdr.sec_lcid().unwrap(), 0);
+        assert_eq!(hdr.sec_lang_dll().unwrap(), b"");
+        assert_eq!(hdr.thread_count().unwrap(), 0);
+        assert_eq!(hdr.thunk_count().unwrap(), 0);
+        assert_eq!(hdr.gui_table_va().unwrap(), 0);
+        assert_eq!(hdr.external_table_va().unwrap(), 0);
+        assert_eq!(hdr.com_register_data_va().unwrap(), 0);
+        assert_eq!(hdr.project_description_offset().unwrap(), 0);
+        assert_eq!(hdr.project_exe_name_offset().unwrap(), 0);
+        assert_eq!(hdr.project_help_file_offset().unwrap(), 0);
+        assert_eq!(hdr.mdl_int_ctls().unwrap(), 0);
+        assert_eq!(hdr.mdl_int_ctls2().unwrap(), 0);
     }
 
     #[test]
@@ -363,6 +369,6 @@ mod tests {
         let data = make_vb_header();
         let hdr1 = VbHeader::parse(&data).unwrap();
         let hdr2 = hdr1; // Copy
-        assert_eq!(hdr1.runtime_build(), hdr2.runtime_build());
+        assert_eq!(hdr1.runtime_build().unwrap(), hdr2.runtime_build().unwrap());
     }
 }

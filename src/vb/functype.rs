@@ -38,7 +38,7 @@
 //! - [Gen Digital: Recovery of function prototypes in VB6 executables](https://www.gendigital.com/blog/insights/research/recovery-of-function-prototypes-in-visual-basic-6-executables)
 //! - Reverse-engineered from pe\_x86\_vb\_loader sample via BinaryNinja
 
-use core::fmt;
+use std::fmt;
 
 use crate::{
     addressmap::AddressMap,
@@ -113,7 +113,10 @@ impl<'a> FuncTypDesc<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..Self::MIN_SIZE],
+            bytes: data.get(..Self::MIN_SIZE).ok_or(Error::Truncated {
+                needed: Self::MIN_SIZE,
+                available: data.len(),
+            })?,
         })
     }
 
@@ -122,7 +125,7 @@ impl<'a> FuncTypDesc<'a> {
     /// Encodes both the argument count (bits 3-7) and property kind (bits 0-2).
     #[inline]
     pub fn raw_arg_size(&self) -> u8 {
-        self.bytes[0]
+        self.bytes.first().copied().unwrap_or(0)
     }
 
     /// Number of explicit arguments (extracted from bits 3-7 of `arg_size`).
@@ -130,12 +133,12 @@ impl<'a> FuncTypDesc<'a> {
     /// Does not include the implicit return value or `this` pointer.
     #[inline]
     pub fn arg_count(&self) -> u8 {
-        self.bytes[0] >> 3
+        self.raw_arg_size() >> 3
     }
 
     /// Property kind encoded in the lowest 3 bits of `arg_size`.
     pub fn property_kind(&self) -> PropertyKind {
-        match self.bytes[0] & 0x07 {
+        match self.raw_arg_size() & 0x07 {
             0 => PropertyKind::None,
             1 | 5 => PropertyKind::Get,
             2 => PropertyKind::Let,
@@ -147,7 +150,7 @@ impl<'a> FuncTypDesc<'a> {
     /// Returns `true` if this is a Property (Get/Let/Set) rather than Sub/Function.
     #[inline]
     pub fn is_property(&self) -> bool {
-        self.bytes[0] & 0x07 != 0
+        self.raw_arg_size() & 0x07 != 0
     }
 
     /// Raw flags byte at offset 0x01.
@@ -159,7 +162,7 @@ impl<'a> FuncTypDesc<'a> {
     /// | 2-7 | 0xFC | Bits 2-7 encode the named argument count (0x3F = none) |
     #[inline]
     pub fn flags(&self) -> u8 {
-        self.bytes[1]
+        self.bytes.get(1).copied().unwrap_or(0)
     }
 
     /// Returns `true` if this function has a return type.
@@ -168,7 +171,7 @@ impl<'a> FuncTypDesc<'a> {
     /// Functions (not Subs) and Property Get procedures have return types.
     #[inline]
     pub fn has_return_type(&self) -> bool {
-        self.bytes[1] & 0x01 != 0
+        self.flags() & 0x01 != 0
     }
 
     /// Returns `true` if this function has a ParamArray (variable argument list).
@@ -178,7 +181,7 @@ impl<'a> FuncTypDesc<'a> {
     /// for the ParamArray parameter consuming the remaining arguments.
     #[inline]
     pub fn has_param_array(&self) -> bool {
-        self.bytes[1] & 0x02 != 0
+        self.flags() & 0x02 != 0
     }
 
     /// VTable offset at offset 0x02 (2 bytes, little-endian).
@@ -189,8 +192,8 @@ impl<'a> FuncTypDesc<'a> {
     /// which reads `*(ftd+2) & 1` to check this flag. The first user method
     /// typically starts at offset 0x1C (after IUnknown + IDispatch = 7 methods).
     #[inline]
-    pub fn vtable_offset(&self) -> u16 {
-        read_u16_le(self.bytes, 0x02) & 0xFFFE
+    pub fn vtable_offset(&self) -> Result<u16, Error> {
+        Ok(read_u16_le(self.bytes, 0x02)? & 0xFFFE)
     }
 
     /// Object index at offset 0x04 (signed 16-bit).
@@ -206,8 +209,8 @@ impl<'a> FuncTypDesc<'a> {
     /// for type resolution or by `ITypeInfo` implementations not in the
     /// runtime hot path.
     #[inline]
-    pub fn object_index(&self) -> i16 {
-        read_u16_le(self.bytes, 0x04) as i16
+    pub fn object_index(&self) -> Result<i16, Error> {
+        Ok(read_u16_le(self.bytes, 0x04)? as i16)
     }
 
     /// VA of optional parameter default values header at offset 0x08.
@@ -230,7 +233,7 @@ impl<'a> FuncTypDesc<'a> {
     ///
     /// Use [`optional_defaults`](Self::optional_defaults) to parse these.
     #[inline]
-    pub fn optional_defaults_va(&self) -> u32 {
+    pub fn optional_defaults_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
@@ -241,7 +244,7 @@ impl<'a> FuncTypDesc<'a> {
     /// COM clients use to invoke this method. Observed as a decreasing
     /// index within the object's function type descriptor array.
     #[inline]
-    pub fn dispid(&self) -> u16 {
+    pub fn dispid(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x0C)
     }
 
@@ -251,7 +254,7 @@ impl<'a> FuncTypDesc<'a> {
     /// Returns `None` if the function has no return type (i.e., it's a Sub).
     pub fn return_type(&self) -> Option<VbType> {
         if self.has_return_type() {
-            Some(VbType(self.bytes[0x0E]))
+            self.bytes.get(0x0E).copied().map(VbType)
         } else {
             None
         }
@@ -277,7 +280,7 @@ impl<'a> FuncTypDesc<'a> {
     /// Observed values: `0x60` for regular Sub/Function, `0x68` for Property.
     #[inline]
     pub fn func_flags(&self) -> u8 {
-        self.bytes[0x0F]
+        self.bytes.get(0x0F).copied().unwrap_or(0)
     }
 
     /// Returns `true` if `func_flags` bit 3 indicates a property procedure.
@@ -286,7 +289,7 @@ impl<'a> FuncTypDesc<'a> {
     /// secondary flags byte rather than the `bArgSize` encoding.
     #[inline]
     pub fn func_flags_is_property(&self) -> bool {
-        self.bytes[0x0F] & 0x08 != 0
+        self.func_flags() & 0x08 != 0
     }
 
     /// VA of the parameter name string pointer array at offset 0x10.
@@ -294,7 +297,7 @@ impl<'a> FuncTypDesc<'a> {
     /// Points to an array of VAs, one per parameter. Each VA points to
     /// a null-terminated ANSI parameter name string.
     #[inline]
-    pub fn param_names_va(&self) -> u32 {
+    pub fn param_names_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x10)
     }
 
@@ -308,24 +311,26 @@ impl<'a> FuncTypDesc<'a> {
     ///
     /// * `map` - Address map for VA-to-offset resolution.
     pub fn param_names<'b>(&self, map: &AddressMap<'b>) -> Vec<&'b [u8]> {
-        let base = self.param_names_va();
+        let Ok(base) = self.param_names_va() else {
+            return Vec::new();
+        };
         if base == 0 || self.arg_count() == 0 {
             return Vec::new();
         }
         let count = self.arg_count() as usize;
         let mut names = Vec::with_capacity(count);
         for i in 0..count {
-            let ptr_va = base.wrapping_add(i as u32 * 4);
+            let ptr_va = base.wrapping_add((i as u32).wrapping_mul(4));
             let name: &'b [u8] = map
                 .slice_from_va(ptr_va, 4)
                 .ok()
                 .and_then(|d| {
-                    let name_va = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
+                    let name_va = read_u32_le(d, 0).ok()?;
                     if name_va == 0 {
                         return None;
                     }
                     let off = map.va_to_offset(name_va).ok()?;
-                    Some(read_cstr(map.file(), off))
+                    read_cstr(map.file(), off).ok()
                 })
                 .unwrap_or(b"");
             names.push(name);
@@ -396,20 +401,21 @@ impl<'a> FuncTypDesc<'a> {
         }
 
         // Arg types start at offset 0x20 within the extended FuncTypDesc data
-        if self.bytes.len() <= 0x20 {
+        let Some(data) = self.bytes.get(0x20..) else {
+            return Vec::new();
+        };
+        if data.is_empty() {
             return Vec::new();
         }
 
-        let data = &self.bytes[0x20..];
         let mut types = Vec::with_capacity(count);
         let mut pos = 0;
         for _ in 0..count {
-            if pos >= data.len() {
+            let Some(&type_byte) = data.get(pos) else {
                 break;
-            }
-            let type_byte = data[pos];
+            };
             types.push(ArgType(type_byte));
-            pos += calc_arg_type_entry_size(data, pos);
+            pos = pos.saturating_add(calc_arg_type_entry_size(data, pos));
         }
         types
     }
@@ -439,7 +445,10 @@ impl<'a> FuncTypDesc<'a> {
         // Keep as much data as available (up to a reasonable max)
         let usable = data.len().min(0x40);
         Ok(Self {
-            bytes: &data[..usable],
+            bytes: data.get(..usable).ok_or(Error::Truncated {
+                needed: usable,
+                available: data.len(),
+            })?,
         })
     }
 
@@ -452,7 +461,9 @@ impl<'a> FuncTypDesc<'a> {
     /// Returns a `Vec` of [`OptionalDefault`] entries, one per optional parameter.
     /// Returns empty if `optional_defaults_va` is 0 or if parsing fails.
     pub fn optional_defaults(&self, map: &AddressMap<'_>) -> Vec<OptionalDefault> {
-        let header_va = self.optional_defaults_va();
+        let Ok(header_va) = self.optional_defaults_va() else {
+            return Vec::new();
+        };
         if header_va == 0 {
             return Vec::new();
         }
@@ -461,8 +472,13 @@ impl<'a> FuncTypDesc<'a> {
         let Ok(hdr) = map.slice_from_va(header_va, 8) else {
             return Vec::new();
         };
-        let total_size = read_u32_le(hdr, 0) as usize;
-        let defaults_va = read_u32_le(hdr, 4);
+        let Ok(total_size) = read_u32_le(hdr, 0) else {
+            return Vec::new();
+        };
+        let total_size = total_size as usize;
+        let Ok(defaults_va) = read_u32_le(hdr, 4) else {
+            return Vec::new();
+        };
         if defaults_va == 0 || total_size == 0 {
             return Vec::new();
         }
@@ -472,26 +488,39 @@ impl<'a> FuncTypDesc<'a> {
         };
 
         let mut defaults = Vec::new();
-        let mut pos = 0;
-        while pos + 2 <= data.len() {
-            let vt_raw = read_u16_le(data, pos);
+        let mut pos: usize = 0;
+        while pos.checked_add(2).is_some_and(|p| p <= data.len()) {
+            let Ok(vt_raw) = read_u16_le(data, pos) else {
+                break;
+            };
             let vt = VarType::from_raw(vt_raw).unwrap_or(VarType::Empty);
             let data_size = vt.data_size();
-            let value_start = pos + 2;
+            let Some(value_start) = pos.checked_add(2) else {
+                break;
+            };
 
             if vt == VarType::Bstr {
                 // BSTR: u16 type + u16 byte_length + UTF-16LE data
-                if value_start + 2 > data.len() {
+                let Some(after_len) = value_start.checked_add(2) else {
+                    break;
+                };
+                if after_len > data.len() {
                     break;
                 }
-                let byte_len = read_u16_le(data, value_start) as usize;
-                let str_start = value_start + 2;
-                let str_end = (str_start + byte_len).min(data.len());
-                let str_bytes = &data[str_start..str_end];
+                let Ok(byte_len_raw) = read_u16_le(data, value_start) else {
+                    break;
+                };
+                let byte_len = byte_len_raw as usize;
+                let str_start = after_len;
+                let str_end = str_start.saturating_add(byte_len).min(data.len());
+                let Some(str_bytes) = data.get(str_start..str_end) else {
+                    break;
+                };
                 let text = String::from_utf16_lossy(
                     &str_bytes
                         .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .filter_map(|c| <[u8; 2]>::try_from(c).ok())
+                        .map(u16::from_le_bytes)
                         .collect::<Vec<_>>(),
                 );
                 defaults.push(OptionalDefault {
@@ -500,15 +529,23 @@ impl<'a> FuncTypDesc<'a> {
                     value: DefaultValue::String(text),
                 });
                 // Advance: u16 type(2) + u16 byte_length(2) + aligned string data
-                let aligned_len = (byte_len + 1) & !1;
-                pos = value_start + 2 + aligned_len;
+                let aligned_len = byte_len.saturating_add(1) & !1;
+                let Some(next) = after_len.checked_add(aligned_len) else {
+                    break;
+                };
+                pos = next;
             } else if data_size > 0 {
-                let val_end = (value_start + data_size).min(data.len());
-                let val_bytes = &data[value_start..val_end];
+                let val_end = value_start.saturating_add(data_size).min(data.len());
+                let Some(val_bytes) = data.get(value_start..val_end) else {
+                    break;
+                };
                 let value = match vt {
                     VarType::I2 | VarType::Bool | VarType::I1 | VarType::Ui1 | VarType::Ui2 => {
                         if val_bytes.len() >= 2 {
-                            DefaultValue::Integer(read_u16_le(val_bytes, 0) as i16 as i64)
+                            match read_u16_le(val_bytes, 0) {
+                                Ok(v) => DefaultValue::Integer(i64::from(v as i16)),
+                                Err(_) => DefaultValue::Raw(val_bytes.to_vec()),
+                            }
                         } else {
                             DefaultValue::Raw(val_bytes.to_vec())
                         }
@@ -521,7 +558,10 @@ impl<'a> FuncTypDesc<'a> {
                     | VarType::Int
                     | VarType::Uint => {
                         if val_bytes.len() >= 4 {
-                            DefaultValue::Integer(read_u32_le(val_bytes, 0) as i32 as i64)
+                            match read_u32_le(val_bytes, 0) {
+                                Ok(v) => DefaultValue::Integer(i64::from(v as i32)),
+                                Err(_) => DefaultValue::Raw(val_bytes.to_vec()),
+                            }
                         } else {
                             DefaultValue::Raw(val_bytes.to_vec())
                         }
@@ -529,7 +569,10 @@ impl<'a> FuncTypDesc<'a> {
                     _ => DefaultValue::Raw(val_bytes.to_vec()),
                 };
                 defaults.push(OptionalDefault { vt, vt_raw, value });
-                pos = value_start + data_size;
+                let Some(next) = value_start.checked_add(data_size) else {
+                    break;
+                };
+                pos = next;
             } else {
                 // Zero-size types (Empty, Null, Variant)
                 defaults.push(OptionalDefault {
@@ -599,10 +642,9 @@ impl fmt::Display for OptionalDefault {
 /// or 0x1D include 4-byte aligned extra data (e.g., object reference or
 /// UDT descriptor pointer).
 fn calc_arg_type_entry_size(data: &[u8], pos: usize) -> usize {
-    if pos >= data.len() {
+    let Some(&type_byte) = data.get(pos) else {
         return 1;
-    }
-    let type_byte = data[pos];
+    };
     let base = type_byte & 0x1F;
 
     // Base size: 1 byte for the type descriptor
@@ -612,9 +654,9 @@ fn calc_arg_type_entry_size(data: &[u8], pos: usize) -> usize {
     match base {
         0x11 | 0x13 | 0x14 | 0x1C | 0x1D => {
             // Align (pos + base_size) up to 4-byte boundary, then add 4
-            let after_type = pos + base_size;
-            let aligned = (after_type + 3) & !3;
-            (aligned - pos) + 4
+            let after_type = pos.saturating_add(base_size);
+            let aligned = after_type.saturating_add(3) & !3;
+            aligned.saturating_sub(pos).saturating_add(4)
         }
         _ => base_size,
     }
@@ -794,10 +836,10 @@ mod tests {
         assert_eq!(ftd.property_kind(), PropertyKind::None);
         assert!(ftd.has_return_type());
         assert_eq!(ftd.return_type(), Some(VbType(0x03))); // Long
-        assert_eq!(ftd.vtable_offset(), 0x001C);
-        assert_eq!(ftd.object_index(), -1);
-        assert_eq!(ftd.optional_defaults_va(), 0);
-        assert_eq!(ftd.param_names_va(), 0x00405574);
+        assert_eq!(ftd.vtable_offset().unwrap(), 0x001C);
+        assert_eq!(ftd.object_index().unwrap(), -1);
+        assert_eq!(ftd.optional_defaults_va().unwrap(), 0);
+        assert_eq!(ftd.param_names_va().unwrap(), 0x00405574);
         assert_eq!(ftd.kind_keyword(), "Function");
     }
 
@@ -808,8 +850,8 @@ mod tests {
         assert_eq!(ftd.property_kind(), PropertyKind::None);
         assert!(ftd.has_return_type());
         assert_eq!(ftd.return_type(), Some(VbType(0x03)));
-        assert_eq!(ftd.vtable_offset(), 0x0024);
-        assert!(ftd.optional_defaults_va() != 0); // Has optional defaults header
+        assert_eq!(ftd.vtable_offset().unwrap(), 0x0024);
+        assert!(ftd.optional_defaults_va().unwrap() != 0); // Has optional defaults header
         assert_eq!(ftd.kind_keyword(), "Function");
     }
 
@@ -821,7 +863,7 @@ mod tests {
         assert!(ftd.is_property());
         assert!(ftd.has_return_type());
         assert_eq!(ftd.return_type(), Some(VbType(0x03)));
-        assert_eq!(ftd.vtable_offset(), 0x0030);
+        assert_eq!(ftd.vtable_offset().unwrap(), 0x0030);
         assert_eq!(ftd.func_flags(), 0x68); // Property flag
         assert_eq!(ftd.kind_keyword(), "Property Get");
     }
@@ -846,7 +888,7 @@ mod tests {
     fn test_vtable_offset_masks_runtime_bit() {
         // vtable_offset raw = 0x001D, masked = 0x001C
         let ftd = FuncTypDesc::parse(&ZIP_FUNC0).unwrap();
-        assert_eq!(ftd.vtable_offset(), 0x001C);
+        assert_eq!(ftd.vtable_offset().unwrap(), 0x001C);
     }
 
     #[test]

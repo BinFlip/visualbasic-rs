@@ -75,20 +75,23 @@ impl<'a> PrivateObjectDescriptor<'a> {
                 context: "PrivateObjectDescriptor",
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "PrivateObjectDescriptor",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Back-pointer to the parent [`ObjectInfo`](super::object::ObjectInfo) at offset 0x04.
     #[inline]
-    pub fn object_info_va(&self) -> u32 {
+    pub fn object_info_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
     /// Number of public functions/methods at offset 0x10 (u16).
     #[inline]
-    pub fn func_count(&self) -> u16 {
+    pub fn func_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x10)
     }
 
@@ -98,13 +101,13 @@ impl<'a> PrivateObjectDescriptor<'a> {
     /// **Not read by any code in MSVBVM60.DLL** — exhaustive search confirmed
     /// the runtime ignores this field. Likely vestigial or IDE-only metadata.
     #[inline]
-    pub fn func_count2(&self) -> u16 {
+    pub fn func_count2(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x12)
     }
 
     /// Number of public variables at offset 0x14 (u16).
     #[inline]
-    pub fn var_count(&self) -> u16 {
+    pub fn var_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x14)
     }
 
@@ -117,13 +120,13 @@ impl<'a> PrivateObjectDescriptor<'a> {
     /// without public prototypes (e.g., event handlers).
     /// Array length = [`func_count`](Self::func_count) + [`var_count`](Self::var_count).
     #[inline]
-    pub fn func_type_descs_va(&self) -> u32 {
+    pub fn func_type_descs_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x18)
     }
 
     /// VA of the secondary method name table at offset 0x20.
     #[inline]
-    pub fn method_name_table_va(&self) -> u32 {
+    pub fn method_name_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x20)
     }
 
@@ -133,7 +136,7 @@ impl<'a> PrivateObjectDescriptor<'a> {
     /// These are shared across all functions in the object (e.g., `"Data"`,
     /// `"PassWord"`, `"ZipName"`).
     #[inline]
-    pub fn param_names_va(&self) -> u32 {
+    pub fn param_names_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 
@@ -148,13 +151,13 @@ impl<'a> PrivateObjectDescriptor<'a> {
     /// Still useful for analysis: reveals runtime function dependencies and
     /// method names for each public variable.
     #[inline]
-    pub fn var_stubs_va(&self) -> u32 {
+    pub fn var_stubs_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x28)
     }
 
     /// Total size of the function type descriptors area at offset 0x38.
     #[inline]
-    pub fn desc_size(&self) -> u32 {
+    pub fn desc_size(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x38)
     }
 
@@ -170,7 +173,7 @@ impl<'a> PrivateObjectDescriptor<'a> {
     ///
     /// No other values have been observed.
     #[inline]
-    pub fn flags(&self) -> u32 {
+    pub fn flags(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x3C)
     }
 
@@ -181,7 +184,7 @@ impl<'a> PrivateObjectDescriptor<'a> {
     /// which checks bit 4 of `fObjectType`.
     #[inline]
     pub fn is_class(&self) -> bool {
-        self.flags() & 0x0100 != 0
+        self.flags().is_ok_and(|f| f & 0x0100 != 0)
     }
 }
 
@@ -210,26 +213,26 @@ mod tests {
     #[test]
     fn test_parse_cls_zip() {
         let pod = PrivateObjectDescriptor::parse(&CLS_ZIP).unwrap();
-        assert_eq!(pod.object_info_va(), 0x0040281C);
-        assert_eq!(pod.func_count(), 14);
-        assert_eq!(pod.var_count(), 5);
-        assert_eq!(pod.func_type_descs_va(), 0x00405CA8);
-        assert_eq!(pod.param_names_va(), 0x00405544);
-        assert_eq!(pod.var_stubs_va(), 0x00405644);
-        assert_eq!(pod.desc_size(), 0x4C);
-        assert_eq!(pod.flags(), 0x0104);
+        assert_eq!(pod.object_info_va().unwrap(), 0x0040281C);
+        assert_eq!(pod.func_count().unwrap(), 14);
+        assert_eq!(pod.var_count().unwrap(), 5);
+        assert_eq!(pod.func_type_descs_va().unwrap(), 0x00405CA8);
+        assert_eq!(pod.param_names_va().unwrap(), 0x00405544);
+        assert_eq!(pod.var_stubs_va().unwrap(), 0x00405644);
+        assert_eq!(pod.desc_size().unwrap(), 0x4C);
+        assert_eq!(pod.flags().unwrap(), 0x0104);
         assert!(pod.is_class());
     }
 
     #[test]
     fn test_parse_form1() {
         let pod = PrivateObjectDescriptor::parse(&FORM1).unwrap();
-        assert_eq!(pod.object_info_va(), 0x0040243C);
-        assert_eq!(pod.func_count(), 0);
-        assert_eq!(pod.var_count(), 0);
-        assert_eq!(pod.func_type_descs_va(), 0x0040558C);
-        assert_eq!(pod.desc_size(), 0x44);
-        assert_eq!(pod.flags(), 0x0004);
+        assert_eq!(pod.object_info_va().unwrap(), 0x0040243C);
+        assert_eq!(pod.func_count().unwrap(), 0);
+        assert_eq!(pod.var_count().unwrap(), 0);
+        assert_eq!(pod.func_type_descs_va().unwrap(), 0x0040558C);
+        assert_eq!(pod.desc_size().unwrap(), 0x44);
+        assert_eq!(pod.flags().unwrap(), 0x0004);
         assert!(!pod.is_class());
     }
 
@@ -245,10 +248,10 @@ mod tests {
     #[test]
     fn test_parse_coolbar_ocx() {
         let pod = PrivateObjectDescriptor::parse(&COOLBAR_OCX).unwrap();
-        assert_eq!(pod.func_count(), 30);
-        assert_eq!(pod.func_count2(), 13);
-        assert_eq!(pod.var_count(), 0);
-        assert_eq!(pod.flags(), 0x0104);
+        assert_eq!(pod.func_count().unwrap(), 30);
+        assert_eq!(pod.func_count2().unwrap(), 13);
+        assert_eq!(pod.var_count().unwrap(), 0);
+        assert_eq!(pod.flags().unwrap(), 0x0104);
         assert!(pod.is_class());
     }
 

@@ -35,7 +35,11 @@ pub use methodlink::{MethodLink, MethodLinkIterator};
 pub use pcodemethod::PCodeMethod;
 pub use vbcontrol::{ControlEntryIterator, VbControl};
 pub use vbobject::{
-    CodeEntry, CodeEntryKind, FuncTypDescIter, MethodIterator, MethodNameResult,
+    CodeEntry, CodeEntryKind, EventBinding, FuncTypDescIter, MethodIterator, MethodNameResult,
     PCodeMethodIterator, VbObject, format_signature,
 };
-pub use vbproject::{ExternalIterator, ObjectIterator, VbProject};
+pub use vbproject::{
+    CodeEntrypoint, CompilationMode, DiagnosticKind, DiagnosticSeverity, EntrypointKind,
+    ExternalIterator, GuiEntriesWithFormData, GuiEntryWithFormData, ObjectIterator,
+    ParseDiagnostic, VbProject,
+};

@@ -14,7 +14,7 @@
 //! The runtime reads `+0x28 & 0xF` as a GUI element type code and creates
 //! different COM wrapper objects depending on the type.
 
-use core::fmt;
+use std::fmt;
 
 use crate::{addressmap::AddressMap, error::Error, util::read_u32_le, vb::control::Guid};
 
@@ -197,10 +197,12 @@ impl<'a> GuiTableEntry<'a> {
                 context: "GuiTableEntry",
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::MIN_SIZE],
-            va: 0,
-        })
+        let bytes = data.get(..Self::MIN_SIZE).ok_or(Error::TooShort {
+            expected: Self::MIN_SIZE,
+            actual: data.len(),
+            context: "GuiTableEntry",
+        })?;
+        Ok(Self { bytes, va: 0 })
     }
 
     /// Parses a GUI table entry with a known VA.
@@ -220,13 +222,13 @@ impl<'a> GuiTableEntry<'a> {
     ///
     /// The next entry is at `this_entry_va + entry_size`.
     #[inline]
-    pub fn entry_size(&self) -> u32 {
+    pub fn entry_size(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// Primary object GUID at offset 0x04 (16 bytes).
     pub fn guid(&self) -> Option<Guid> {
-        Guid::from_bytes(&self.bytes[0x04..0x14])
+        Guid::from_bytes(self.bytes.get(0x04..0x14)?)
     }
 
     /// Secondary GUID at offset 0x14 (16 bytes).
@@ -234,7 +236,7 @@ impl<'a> GuiTableEntry<'a> {
     /// All zeros for standard Forms. Non-zero for MDIForm, UserControl,
     /// and PropertyPage types.
     pub fn secondary_guid(&self) -> Option<Guid> {
-        let data = &self.bytes[0x14..0x24];
+        let data = self.bytes.get(0x14..0x24)?;
         if data.iter().all(|&b| b == 0) {
             return None;
         }
@@ -246,24 +248,24 @@ impl<'a> GuiTableEntry<'a> {
     /// Stored to the runtime wrapper's internal structure at +0x88.
     /// Zero for standard Forms.
     #[inline]
-    pub fn field_24(&self) -> u32 {
+    pub fn field_24(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 
     /// Raw object type flags at offset 0x28.
     #[inline]
-    pub fn object_type_raw(&self) -> u32 {
+    pub fn object_type_raw(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x28)
     }
 
     /// GUI element type (from bits \[3:0\] of `dwObjectType`).
     pub fn object_type(&self) -> GuiObjectType {
-        GuiObjectType::from_raw((self.object_type_raw() & 0xF) as u8)
+        GuiObjectType::from_raw((self.object_type_raw().unwrap_or(0) & 0xF) as u8)
     }
 
     /// Typed flag wrapper for the full `dwObjectType` at offset 0x28.
     pub fn gui_type_flags(&self) -> GuiTypeFlags {
-        GuiTypeFlags(self.object_type_raw())
+        GuiTypeFlags(self.object_type_raw().unwrap_or(0))
     }
 
     /// Type-specific u32 at offset 0x2C.
@@ -271,7 +273,7 @@ impl<'a> GuiTableEntry<'a> {
     /// Non-zero for MDI forms (offset/size value used by `FormWrapper_Init`).
     /// Zero for Form and UserControl types.
     #[inline]
-    pub fn type_data_dword(&self) -> u32 {
+    pub fn type_data_dword(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x2C)
     }
 
@@ -280,7 +282,7 @@ impl<'a> GuiTableEntry<'a> {
     /// Contains an interface IID for MDI and UserControl types (from the
     /// project's typelib). All zeros for standard Form types.
     pub fn type_data_iid(&self) -> Option<Guid> {
-        let data = &self.bytes[0x30..0x40];
+        let data = self.bytes.get(0x30..0x40)?;
         if data.iter().all(|&b| b == 0) {
             return None;
         }
@@ -289,19 +291,19 @@ impl<'a> GuiTableEntry<'a> {
 
     /// Compiled form binary size at offset 0x40.
     #[inline]
-    pub fn form_data_size(&self) -> u32 {
+    pub fn form_data_size(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x40)
     }
 
     /// VA of form design/binary data at offset 0x48.
     #[inline]
-    pub fn form_data_va(&self) -> u32 {
+    pub fn form_data_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x48)
     }
 
     /// Secondary size field at offset 0x4C.
     #[inline]
-    pub fn form_data_size2(&self) -> u32 {
+    pub fn form_data_size2(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x4C)
     }
 }
@@ -346,12 +348,12 @@ impl<'a> Iterator for GuiTableIter<'a> {
             .slice_from_va(self.current_va, GuiTableEntry::MIN_SIZE)
             .ok()?;
         let entry = GuiTableEntry::parse_at(data, self.current_va).ok()?;
-        let size = entry.entry_size();
+        let size = entry.entry_size().ok()?;
         if size == 0 {
             return None; // Prevent infinite loop
         }
         self.current_va = self.current_va.wrapping_add(size);
-        self.remaining -= 1;
+        self.remaining = self.remaining.saturating_sub(1);
         Some(entry)
     }
 }
@@ -378,13 +380,13 @@ mod tests {
     #[test]
     fn test_parse_loader_form() {
         let entry = GuiTableEntry::parse(&LOADER_FORM).unwrap();
-        assert_eq!(entry.entry_size(), 0x50);
+        assert_eq!(entry.entry_size().unwrap(), 0x50);
         assert!(entry.guid().is_some());
         assert_eq!(entry.object_type(), GuiObjectType::Form);
-        assert_eq!(entry.object_type_raw(), 0x90);
-        assert_eq!(entry.form_data_size(), 0xC5);
-        assert_eq!(entry.form_data_va(), 0x00401C94);
-        assert_eq!(entry.form_data_size2(), 0x4C);
+        assert_eq!(entry.object_type_raw().unwrap(), 0x90);
+        assert_eq!(entry.form_data_size().unwrap(), 0xC5);
+        assert_eq!(entry.form_data_va().unwrap(), 0x00401C94);
+        assert_eq!(entry.form_data_size2().unwrap(), 0x4C);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //!   cargo run --example dump -- <path-to-vb6-exe>
 
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::str;
 use std::{env, fs, process};
 
@@ -24,131 +25,138 @@ use visualbasic::{
     },
 };
 
+type DynResult<T> = Result<T, Box<dyn StdError>>;
+
 fn main() {
-    let path = env::args().nth(1).unwrap_or_else(|| {
+    if let Err(e) = run() {
+        eprintln!("error: {}", e);
+        process::exit(1);
+    }
+}
+
+fn run() -> DynResult<()> {
+    let path = env::args().nth(1).ok_or_else(|| -> Box<dyn StdError> {
         eprintln!("usage: dump <path-to-vb6-exe>");
-        process::exit(1);
-    });
+        "missing argument".into()
+    })?;
 
-    let data = fs::read(&path).unwrap_or_else(|e| {
-        eprintln!("error: cannot read '{}': {}", path, e);
-        process::exit(1);
-    });
+    let data = fs::read(&path)
+        .map_err(|e| -> Box<dyn StdError> { format!("cannot read '{}': {}", path, e).into() })?;
 
-    let project = VbProject::from_bytes(&data).unwrap_or_else(|e| {
-        eprintln!("error: failed to parse VB6 project: {}", e);
-        process::exit(1);
-    });
+    let project = VbProject::from_bytes(&data).map_err(|e| -> Box<dyn StdError> {
+        format!("failed to parse VB6 project: {}", e).into()
+    })?;
 
-    print_asm(&project, &path);
+    print_asm(&project, &path)
 }
 
 /// Prints the full ildasm-style text dump for a VB6 project.
-fn print_asm(project: &VbProject<'_>, path: &str) {
-    print_assembly_header(project, path);
-    print_com_registration(project);
-    print_gui_table(project);
-    print_externals(project);
-    print_components(project);
-    print_control_types(project);
+fn print_asm(project: &VbProject<'_>, path: &str) -> DynResult<()> {
+    print_assembly_header(project, path)?;
+    print_com_registration(project)?;
+    print_gui_table(project)?;
+    print_externals(project)?;
+    print_components(project)?;
+    print_control_types(project)?;
 
-    let pi2_va = project.object_table().project_info2_va();
+    let pi2_va = project.object_table().project_info2_va()?;
 
     // Collect GUI table entries for form data parsing (parallel index with objects)
     let map = project.address_map();
     let hdr = project.vb_header();
-    let gui_entries: Vec<GuiTableEntry<'_>> =
-        GuiTableIter::new(map, hdr.gui_table_va(), hdr.form_count()).collect();
+    let gui_va = hdr.gui_table_va()?;
+    let form_count = hdr.form_count()?;
+    let gui_entries: Vec<GuiTableEntry<'_>> = GuiTableIter::new(map, gui_va, form_count).collect();
 
-    for (i, obj) in project.objects().enumerate() {
-        let obj = obj.unwrap_or_else(|e| {
-            eprintln!("error: failed to parse object {}: {}", i, e);
-            process::exit(1);
-        });
+    for (i, obj) in project.objects()?.enumerate() {
+        let obj = obj.map_err(|e| -> Box<dyn StdError> {
+            format!("failed to parse object {}: {}", i, e).into()
+        })?;
         println!();
         let gui_entry = gui_entries.get(i);
-        print_object(&obj, pi2_va, gui_entry);
+        print_object(&obj, pi2_va, gui_entry)?;
     }
+    Ok(())
 }
 
 /// Prints the project-level header: file path, VB header fields, project data,
 /// and object table summary.
-fn print_assembly_header(project: &VbProject<'_>, path: &str) {
+fn print_assembly_header(project: &VbProject<'_>, path: &str) -> DynResult<()> {
     let hdr = project.vb_header();
     let pd = project.project_data();
     let ot = project.object_table();
     let name = str_or(project.project_name(), "<unknown>");
-    let mode = if project.is_pcode() {
+    let mode = if project.is_pcode()? {
         "P-Code"
     } else {
         "Native"
     };
 
+    let runtime_build = hdr.runtime_build()?;
+    let runtime_revision = hdr.runtime_revision()?;
+    let lcid = hdr.lcid()?;
+    let object_count = project.object_count()?;
+    let project_data_va = hdr.project_data_va()?;
+    let sub_main_va = hdr.sub_main_va()?;
+
     println!("// VB6 Assembly: {}", path);
     println!(
         "// Runtime {}.{:02} | {} | LCID 0x{:04X} | {} objects",
-        hdr.runtime_build(),
-        hdr.runtime_revision(),
-        mode,
-        hdr.lcid(),
-        project.object_count()
+        runtime_build, runtime_revision, mode, lcid, object_count
     );
-    println!("// Language DLL: {}", lossy_cstr(hdr.lang_dll()));
-    println!("// Path: {}", lossy_cstr(pd.path_info()));
-    if hdr.sub_main_va() != 0 {
-        println!("// Entry: Sub Main (VA 0x{:08X})", hdr.sub_main_va());
+    println!("// Language DLL: {}", lossy_cstr(hdr.lang_dll()?));
+    println!("// Path: {}", lossy_cstr(pd.path_info()?));
+    if sub_main_va != 0 {
+        println!("// Entry: Sub Main (VA 0x{:08X})", sub_main_va);
     }
     println!("//");
     println!(
         "// VBHeader VA:     0x{:08X}  ProjectData VA: 0x{:08X}",
-        hdr.project_data_va().wrapping_sub(0x30), // approximate: VBHeader precedes ProjectData ptr
-        hdr.project_data_va()
+        project_data_va.wrapping_sub(0x30),
+        project_data_va
     );
     println!(
         "// ObjectTable VA:  0x{:08X}  ObjectArray VA: 0x{:08X}",
-        pd.object_table_va(),
-        ot.object_array_va()
+        pd.object_table_va()?,
+        ot.object_array_va()?
     );
     println!(
         "// Code VA range:   0x{:08X} - 0x{:08X}  Data size: 0x{:X}",
-        pd.code_start_va(),
-        pd.code_end_va(),
-        pd.data_size()
+        pd.code_start_va()?,
+        pd.code_end_va()?,
+        pd.data_size()?
     );
     println!();
     println!(".assembly {} {{", name);
     println!("    .compilation {}", mode.to_lowercase());
-    println!(
-        "    .version {}.{:02}",
-        hdr.runtime_build(),
-        hdr.runtime_revision()
-    );
-    println!("    .lcid 0x{:08X}", hdr.lcid());
-    if let Some(guid) = visualbasic::vb::control::Guid::from_bytes(ot.uuid()) {
+    println!("    .version {}.{:02}", runtime_build, runtime_revision);
+    println!("    .lcid 0x{:08X}", lcid);
+    if let Some(guid) = visualbasic::vb::control::Guid::from_bytes(ot.uuid()?) {
         println!("    .uuid {}", guid);
     }
     println!(
         "    .forms {}  .externals {}  .thunks {}",
-        hdr.form_count(),
-        hdr.external_count(),
-        hdr.thunk_count()
+        hdr.form_count()?,
+        hdr.external_count()?,
+        hdr.thunk_count()?
     );
     println!("}}");
+    Ok(())
 }
 
 /// Prints COM registration data (TypeLib GUIDs, version, help file).
-fn print_com_registration(project: &VbProject<'_>) {
+fn print_com_registration(project: &VbProject<'_>) -> DynResult<()> {
     let map = project.address_map();
     let hdr = project.vb_header();
-    let com_va = hdr.com_register_data_va();
+    let com_va = hdr.com_register_data_va()?;
     if com_va == 0 {
-        return;
+        return Ok(());
     }
     let Ok(data) = map.slice_from_va(com_va, 256) else {
-        return;
+        return Ok(());
     };
     let Ok(reg) = ComRegData::parse(data, com_va) else {
-        return;
+        return Ok(());
     };
 
     let proj_name = reg.project_name(map).unwrap_or("?");
@@ -161,9 +169,9 @@ fn print_com_registration(project: &VbProject<'_>) {
     println!(
         "// COM TypeLib: {} v{}.{} LCID=0x{:04X}",
         guid,
-        reg.major_version(),
-        reg.minor_version(),
-        reg.lcid()
+        reg.major_version()?,
+        reg.minor_version()?,
+        reg.lcid()?
     );
     println!("// COM Project: {}", proj_name);
 
@@ -171,7 +179,10 @@ fn print_com_registration(project: &VbProject<'_>) {
         println!("// COM HelpDir: {}", help);
     }
 
-    for obj in reg.objects(map) {
+    let Ok(objects) = reg.objects(map) else {
+        return Ok(());
+    };
+    for obj in objects {
         let clsid = obj
             .clsid()
             .map(|g| format!("{}", g))
@@ -179,6 +190,7 @@ fn print_com_registration(project: &VbProject<'_>) {
         let name = obj.object_name(map).unwrap_or("?");
         let desc = obj.description(map);
         let prog_id = format!("{}.{}", proj_name, name);
+        let object_flags = obj.object_flags()?;
 
         println!("//   .comclass {} {{", prog_id);
         println!("//       CLSID = {}", clsid);
@@ -187,36 +199,44 @@ fn print_com_registration(project: &VbProject<'_>) {
         }
         println!(
             "//       Flags = 0x{:04X}{}",
-            obj.object_flags(),
-            format_obj_flags(obj.object_flags())
+            object_flags,
+            format_obj_flags(object_flags)
         );
-        if obj.misc_status() != 0 {
-            println!("//       MiscStatus = {}", obj.misc_status());
+        let misc = obj.misc_status()?;
+        if misc != 0 {
+            println!("//       MiscStatus = {}", misc);
         }
-        if obj.toolbox_bitmap_id() != 0 {
-            println!("//       ToolboxBitmap32 = {}", obj.toolbox_bitmap_id());
+        let toolbox = obj.toolbox_bitmap_id()?;
+        if toolbox != 0 {
+            println!("//       ToolboxBitmap32 = {}", toolbox);
         }
-        if obj.default_icon_id() != 0 {
-            println!("//       DefaultIcon = {}", obj.default_icon_id());
+        let icon = obj.default_icon_id()?;
+        if icon != 0 {
+            println!("//       DefaultIcon = {}", icon);
         }
-        for guid in obj.default_iface_guids(map) {
-            println!("//       DefaultIID = {}", guid);
+        if let Ok(default_iface_guids) = obj.default_iface_guids(map) {
+            for guid in default_iface_guids {
+                println!("//       DefaultIID = {}", guid);
+            }
         }
-        for guid in obj.source_iface_guids(map) {
-            println!("//       SourceIID  = {}", guid);
+        if let Ok(source_iface_guids) = obj.source_iface_guids(map) {
+            for guid in source_iface_guids {
+                println!("//       SourceIID  = {}", guid);
+            }
         }
         println!("//   }}");
     }
+    Ok(())
 }
 
 /// Prints the GUI table entries (form dimensions, scroll info, controls).
-fn print_gui_table(project: &VbProject<'_>) {
+fn print_gui_table(project: &VbProject<'_>) -> DynResult<()> {
     let map = project.address_map();
     let hdr = project.vb_header();
-    let gui_va = hdr.gui_table_va();
-    let form_count = hdr.form_count();
+    let gui_va = hdr.gui_table_va()?;
+    let form_count = hdr.form_count()?;
     if gui_va == 0 || form_count == 0 {
-        return;
+        return Ok(());
     }
 
     println!();
@@ -226,9 +246,9 @@ fn print_gui_table(project: &VbProject<'_>) {
             .map(|g| format!("{g}"))
             .unwrap_or_else(|| "?".into());
         let otype = entry.object_type();
-        let data_va = entry.form_data_va();
-        let data_size = entry.form_data_size();
-        let type_flags = entry.object_type_raw();
+        let data_va = entry.form_data_va()?;
+        let data_size = entry.form_data_size()?;
+        let type_flags = entry.object_type_raw()?;
         print!(
             ".gui /*{:02}*/ {} {} data=0x{:08X} size=0x{:X}",
             i, otype, guid, data_va, data_size
@@ -244,12 +264,13 @@ fn print_gui_table(project: &VbProject<'_>) {
             println!("    // Type IID: {iid}");
         }
     }
+    Ok(())
 }
 
 /// Prints the external reference table (COM components, OCX, typelibs).
-fn print_externals(project: &VbProject<'_>) {
+fn print_externals(project: &VbProject<'_>) -> DynResult<()> {
     let mut any = false;
-    for (i, entry) in project.externals().enumerate() {
+    for (i, entry) in project.externals()?.enumerate() {
         if !any {
             println!();
             any = true;
@@ -257,24 +278,29 @@ fn print_externals(project: &VbProject<'_>) {
         match entry {
             Ok(ext) => {
                 let desc = resolve_external(project, &ext);
-                println!(".extern /*{:02}*/ {} // {}", i, desc, ext.kind());
+                let kind_str = match ext.kind() {
+                    Ok(k) => format!("{}", k),
+                    Err(e) => format!("<error: {}>", e),
+                };
+                println!(".extern /*{:02}*/ {} // {}", i, desc, kind_str);
             }
             Err(e) => println!(".extern /*{:02}*/ // error: {}", i, e),
         }
     }
+    Ok(())
 }
 
 /// Prints the VBHeader component table (OCX/ActiveX control registrations).
-fn print_components(project: &VbProject<'_>) {
+fn print_components(project: &VbProject<'_>) -> DynResult<()> {
     let mut any = false;
-    for comp in project.components() {
+    for comp in project.components()? {
         if !any {
             println!();
             any = true;
         }
-        let filename = str::from_utf8(comp.ocx_filename()).unwrap_or("?");
-        let progid = str::from_utf8(comp.prog_id()).unwrap_or("?");
-        let class = str::from_utf8(comp.class_name()).unwrap_or("?");
+        let filename = comp.ocx_filename();
+        let progid = comp.prog_id();
+        let class = comp.class_name();
         print!(".component {filename}!{class} // {progid}");
         let events = comp.event_names();
         if !events.is_empty() {
@@ -282,24 +308,25 @@ fn print_components(project: &VbProject<'_>) {
         }
         println!();
     }
+    Ok(())
 }
 
 /// Prints ProjectInfo2 control type entries (CLSIDs with instance names).
-fn print_control_types(project: &VbProject<'_>) {
+fn print_control_types(project: &VbProject<'_>) -> DynResult<()> {
     let map = project.address_map();
     let ot = project.object_table();
-    let pi2_va = ot.project_info2_va();
+    let pi2_va = ot.project_info2_va()?;
     if pi2_va == 0 {
-        return;
+        return Ok(());
     }
 
     let Ok(_pi2_data) = map.slice_from_va(pi2_va, ProjectInfo2::HEADER_SIZE) else {
-        return;
+        return Ok(());
     };
 
     let entries: Vec<_> = ControlTypeIter::new(map, pi2_va).collect();
     if entries.is_empty() {
-        return;
+        return Ok(());
     }
 
     // Collect COM property names from trailing strings
@@ -320,6 +347,7 @@ fn print_control_types(project: &VbProject<'_>) {
         println!("    // COM properties: {}", prop_names.join(", "));
     }
     println!("}}");
+    Ok(())
 }
 
 /// Formats object type flags as a human-readable parenthesized list.
@@ -368,12 +396,17 @@ fn resolve_external(
     ext: &visualbasic::vb::external::ExternalTableEntry<'_>,
 ) -> String {
     let map = project.address_map();
-    let obj_va = ext.external_object_va();
+    let obj_va = ext.external_object_va().unwrap_or(0);
     if obj_va == 0 {
         return "va=0x00000000".into();
     }
 
-    match ext.kind() {
+    let kind = match ext.kind() {
+        Ok(k) => k,
+        Err(_) => return format!("va=0x{obj_va:08X}"),
+    };
+
+    match kind {
         ExternalKind::DeclareFunction => {
             if let Some(decl) = ext.as_declare(map) {
                 let lib = decl.library_name(map).unwrap_or("?");
@@ -400,15 +433,20 @@ fn resolve_external(
 
 /// Prints a single VB6 object: descriptor, controls, method links, and
 /// disassembled P-Code methods.
-fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTableEntry<'_>>) {
+fn print_object(
+    obj: &VbObject<'_, '_>,
+    _pi2_va: u32,
+    gui_entry: Option<&GuiTableEntry<'_>>,
+) -> DynResult<()> {
     let name = str_or(obj.name(), "<unknown>");
-    let kind = obj.object_kind();
+    let kind = obj.object_kind()?;
     let desc = obj.descriptor();
     let info = obj.info();
 
     // Build VA -> method index+name map for event cross-referencing
     let mut va_to_method: HashMap<u32, (u16, String)> = HashMap::new();
-    for (mi, entry) in obj.methods().enumerate() {
+    let methods_va_for_lookup = info.methods_va().unwrap_or(0);
+    for (mi, entry) in obj.methods()?.enumerate() {
         let mname = obj
             .method_name(mi as u16)
             .ok()
@@ -419,7 +457,7 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
         if let Ok(ref me) = entry {
             let va = match me {
                 MethodEntry::PCode(_) => {
-                    let entry_va = info.methods_va().wrapping_add(mi as u32 * 4);
+                    let entry_va = methods_va_for_lookup.wrapping_add(mi as u32 * 4);
                     obj.project()
                         .address_map()
                         .slice_from_va(entry_va, 4)
@@ -437,21 +475,21 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
     }
 
     println!(".object {} : {} {{", name, kind);
-    println!("    // Object Type:     0x{:08X}", desc.object_type_raw());
-    println!("    // ObjectInfo VA:   0x{:08X}", desc.object_info_va());
-    println!("    // Object Name VA:  0x{:08X}", desc.object_name_va());
+    println!("    // Object Type:     0x{:08X}", desc.object_type_raw()?);
+    println!("    // ObjectInfo VA:   0x{:08X}", desc.object_info_va()?);
+    println!("    // Object Name VA:  0x{:08X}", desc.object_name_va()?);
     println!(
         "    // Methods VA:      0x{:08X}  ({} methods)",
-        info.methods_va(),
-        desc.method_count()
+        info.methods_va()?,
+        desc.method_count()?
     );
-    println!("    // Constants VA:    0x{:08X}", info.constants_va());
+    println!("    // Constants VA:    0x{:08X}", info.constants_va()?);
     if let Some(opt) = obj.optional_info() {
         println!(
             "    // P-Code Count:    {}  Control Count: {}  Method Links: {}",
-            opt.pcode_count(),
-            opt.control_count(),
-            opt.method_link_count()
+            opt.pcode_count()?,
+            opt.control_count()?,
+            opt.method_link_count()?
         );
         let map = obj.project().address_map();
         if let Some(g) = opt.resolve_clsid(map) {
@@ -466,34 +504,29 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
         for (_, g) in opt.events_iids(map) {
             println!("    // Event IID:      {g}");
         }
-        let init_slot = opt.initialize_event_offset() / 4;
-        let term_slot = opt.terminate_event_offset() / 4;
+        let init_off = opt.initialize_event_offset()?;
+        let term_off = opt.terminate_event_offset()?;
+        let init_slot = init_off / 4;
+        let term_slot = term_off / 4;
         println!(
             "    // Init/Term slots: {}/{} (offsets 0x{:04X}/0x{:04X})",
-            init_slot,
-            term_slot,
-            opt.initialize_event_offset(),
-            opt.terminate_event_offset()
+            init_slot, term_slot, init_off, term_off
         );
     }
     if let Some(priv_obj) = obj.private_object() {
         println!(
             "    // Public funcs:    {}  Public vars: {}  Flags: 0x{:04X}",
-            priv_obj.func_count(),
-            priv_obj.var_count(),
-            priv_obj.flags()
+            priv_obj.func_count()?,
+            priv_obj.var_count()?,
+            priv_obj.flags()?
         );
-        if priv_obj.func_type_descs_va() != 0 {
-            println!(
-                "    // FuncTypDescs VA: 0x{:08X}",
-                priv_obj.func_type_descs_va()
-            );
+        let ftd_va = priv_obj.func_type_descs_va()?;
+        if ftd_va != 0 {
+            println!("    // FuncTypDescs VA: 0x{:08X}", ftd_va);
         }
-        if priv_obj.param_names_va() != 0 {
-            println!(
-                "    // Param Names VA:  0x{:08X}",
-                priv_obj.param_names_va()
-            );
+        let pn_va = priv_obj.param_names_va()?;
+        if pn_va != 0 {
+            println!("    // Param Names VA:  0x{:08X}", pn_va);
         }
     }
 
@@ -501,27 +534,29 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
     let func_descs = build_func_type_descs(obj);
 
     // PublicBytes has different formats per object type
+    let pb_va = desc.public_bytes_va()?;
     if desc.is_module() {
         // Modules: PublicVarTable with variable descriptors
-        print_public_vars(obj.project(), desc.public_bytes_va());
+        print_public_vars(obj.project(), pb_va);
     } else {
         // Classes/Forms: instance size + control property init entries
-        print_class_form_public_bytes(obj.project(), desc.public_bytes_va());
+        print_class_form_public_bytes(obj.project(), pb_va);
     }
 
     // Print variable implementation stubs (compiler metadata)
     if let Some(priv_obj) = obj.private_object() {
-        let stubs_va = priv_obj.var_stubs_va();
-        if stubs_va != 0 && priv_obj.var_count() > 0 {
+        let stubs_va = priv_obj.var_stubs_va()?;
+        let var_count = priv_obj.var_count()?;
+        if stubs_va != 0 && var_count > 0 {
             println!();
             for (i, stub) in
-                VarStubIter::new(obj.project().address_map(), stubs_va, priv_obj.var_count())
-                    .enumerate()
+                VarStubIter::new(obj.project().address_map(), stubs_va, var_count).enumerate()
             {
                 let name = stub.name();
                 let name_str = if name.is_empty() { "?" } else { name };
-                let params = if stub.param_count() > 0 {
-                    format!(" ({} params)", stub.param_count())
+                let pcount = stub.param_count().unwrap_or(0);
+                let params = if pcount > 0 {
+                    format!(" ({} params)", pcount)
                 } else {
                     String::new()
                 };
@@ -533,8 +568,8 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
     // Parse form data for authoritative control types
     let form_data = gui_entry.and_then(|ge| {
         let map = obj.project().address_map();
-        let va = ge.form_data_va();
-        let size = ge.form_data_size() as usize;
+        let va = ge.form_data_va().ok()?;
+        let size = ge.form_data_size().ok()? as usize;
         if va == 0 || size == 0 {
             return None;
         }
@@ -544,21 +579,24 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
 
     // Show form data header and controls from form binary
     if let Some(ref fd) = form_data {
-        let ge = gui_entry.unwrap();
+        let ge = gui_entry.ok_or("missing gui_entry while form_data is Some")?;
         let h = fd.header();
+        let ge_data_va = ge.form_data_va()?;
+        let ge_data_size = ge.form_data_size()?;
         println!();
         println!(
             "    .formdata va=0x{:08X} size=0x{:X} width={} height={} {{",
-            ge.form_data_va(),
-            ge.form_data_size(),
-            h.width(),
-            h.height()
+            ge_data_va,
+            ge_data_size,
+            h.width()?,
+            h.height()?
         );
 
         // Decode form-level properties
         let form_props = fd.form_properties();
         if !form_props.is_empty() {
-            let form_ctype = decode_form_type(ge.object_type(), form_props, obj.project());
+            let ge_otype = ge.object_type();
+            let form_ctype = decode_form_type(ge_otype, form_props, obj.project());
             let decoded: Vec<String> = fd
                 .form_properties_decoded(form_ctype)
                 .map(|p| match &p.value {
@@ -572,7 +610,7 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
         }
 
         for fc in fd.controls() {
-            let fc_name = String::from_utf8_lossy(fc.name());
+            let fc_name = fc.name();
             let arr = fc
                 .array_index()
                 .map(|i| format!("({i})"))
@@ -615,21 +653,26 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
     // Print controls with event cross-referencing
     // Use form data for authoritative type identification when available
     let controls: Vec<VbControl<'_>> = if let Some(ref fd) = form_data {
-        obj.controls_with_form_data(fd)
-            .filter_map(|r| r.ok())
-            .collect()
+        match obj.controls_with_form_data(fd) {
+            Ok(it) => it.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
     } else {
-        obj.controls().filter_map(|r| r.ok()).collect()
+        match obj.controls() {
+            Ok(it) => it.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
     };
 
     if !controls.is_empty() {
         println!();
         for ctrl in &controls {
             let raw_name = ctrl.name();
+            let ctrl_index = ctrl.index().unwrap_or(0);
             let ctrl_name = if raw_name.is_empty() {
-                format!("control_{}", ctrl.index())
+                format!("control_{}", ctrl_index)
             } else {
-                String::from_utf8_lossy(raw_name).into_owned()
+                raw_name.into_owned()
             };
             // class_name() now prefers form_control_type (authoritative) over GUID
             let class = ctrl.class_name().unwrap_or("ActiveX");
@@ -638,7 +681,8 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
             println!("    .control {} As {}{}", ctrl_name, class, guid_str);
 
             // Show events from event_table_va (runtime-populated, rarely on disk)
-            for ei in 0..ctrl.event_count() {
+            let event_count = ctrl.event_count().unwrap_or(0);
+            for ei in 0..event_count {
                 let handler_va = ctrl.event_handler_va(ei).unwrap_or(0);
                 if handler_va == 0 {
                     continue;
@@ -685,17 +729,21 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
     }
 
     // Build remaining lookup tables for method info
-    let links: HashMap<usize, _> = obj
-        .method_links()
-        .enumerate()
-        .filter_map(|(i, r)| Some((i, r.ok()?)))
-        .collect();
-    let method_entries: Vec<_> = obj.methods().collect();
+    let links: HashMap<usize, _> = match obj.method_links() {
+        Ok(it) => it
+            .enumerate()
+            .filter_map(|(i, r)| Some((i, r.ok()?)))
+            .collect(),
+        Err(_) => HashMap::new(),
+    };
+    let method_entries: Vec<_> = match obj.methods() {
+        Ok(it) => it.collect(),
+        Err(_) => Vec::new(),
+    };
 
     // Determine total method count from all sources
-    let total = obj
-        .descriptor()
-        .method_count()
+    let descriptor_method_count = obj.descriptor().method_count().unwrap_or(0);
+    let total = descriptor_method_count
         .max(method_entries.len() as u32)
         .max(links.keys().copied().max().map_or(0, |m| m as u32 + 1));
 
@@ -778,28 +826,29 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
         // Show P-Code disassembly if available
         if let Some(Ok(MethodEntry::PCode(method))) = entry {
             let pdi = method.proc_dsc();
-            let pdi_va = method.pcode_va() + method.proc_size() as u32;
+            let proc_size = method.proc_size()?;
+            let pdi_va = method.pcode_va() + proc_size as u32;
             println!(
                 "        // pcode_va=0x{:08X} proc_dsc=0x{:08X} frame=0x{:04X} pcode=0x{:04X} args={} cleanup={} opt_flags=0x{:04X} bos_skip=0x{:04X} actual_size=0x{:04X}",
                 method.pcode_va(),
                 pdi_va,
-                method.frame_size(),
-                method.proc_size(),
-                pdi.arg_count(),
-                pdi.cleanup_count(),
-                pdi.proc_opt_flags_raw(),
-                pdi.bos_skip_table_offset(),
-                pdi.actual_size()
+                method.frame_size()?,
+                proc_size,
+                pdi.arg_count()?,
+                pdi.cleanup_count()?,
+                pdi.proc_opt_flags_raw()?,
+                pdi.bos_skip_table_offset()?,
+                pdi.actual_size()?
             );
             for entry in method.proc_dsc().cleanup_entries() {
-                let offset = entry.frame_offset() as i16;
+                let offset = entry.frame_offset()? as i16;
                 println!(
                     "        // cleanup [ebp{:+}]: {}",
                     offset,
                     entry.property_type()
                 );
             }
-            for insn in method.instructions() {
+            for insn in method.instructions()? {
                 match insn {
                     Ok(i) => {
                         // Annotate integer literals with VB6 constant names
@@ -826,12 +875,13 @@ fn print_object(obj: &VbObject<'_, '_>, _pi2_va: u32, gui_entry: Option<&GuiTabl
     }
 
     println!("}}");
+    Ok(())
 }
 
-/// Converts a byte-string result to an owned string, using `fallback` on error.
-fn str_or(result: Result<&[u8], visualbasic::Error>, fallback: &str) -> String {
+/// Converts a Cow string result to an owned string, using `fallback` on error.
+fn str_or(result: Result<std::borrow::Cow<'_, str>, visualbasic::Error>, fallback: &str) -> String {
     result
-        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .map(|c| c.into_owned())
         .unwrap_or_else(|_| fallback.into())
 }
 
@@ -847,8 +897,11 @@ fn print_public_vars(project: &VbProject<'_>, pb_va: u32) {
     let Ok(pvt_header) = PublicVarTable::parse(header) else {
         return;
     };
-    let full_size = pvt_header.total_size() as usize;
-    let Ok(full_data) = map.slice_from_va(pb_va, full_size) else {
+    let total_size = match pvt_header.total_size() {
+        Ok(t) => t as usize,
+        Err(_) => return,
+    };
+    let Ok(full_data) = map.slice_from_va(pb_va, total_size) else {
         return;
     };
     let Ok(pvt) = PublicVarTable::parse(full_data) else {
@@ -883,10 +936,10 @@ fn print_class_form_public_bytes(project: &VbProject<'_>, pb_va: u32) {
         return;
     };
 
+    let instance_size = cfpb.instance_size().unwrap_or(0);
     println!(
         "    // instance_size=0x{:04X} ({} bytes)",
-        cfpb.instance_size(),
-        cfpb.instance_size()
+        instance_size, instance_size
     );
 
     if let Some(iid) = cfpb.default_iid() {
@@ -899,13 +952,13 @@ fn print_class_form_public_bytes(project: &VbProject<'_>, pb_va: u32) {
     if cfpb.has_controls() {
         println!(
             "    // control_props: {} entries ({} properties)",
-            cfpb.control_count(),
-            cfpb.property_count()
+            cfpb.control_count().unwrap_or(0),
+            cfpb.property_count().unwrap_or(0)
         );
         for entry in cfpb.control_entries() {
             println!(
                 "    //   +0x{:04X}: {} (type=0x{:02X} flags=0x{:02X})",
-                entry.frame_offset(),
+                entry.frame_offset().unwrap_or(0),
                 entry.property_type(),
                 entry.raw_type(),
                 entry.flags()
@@ -926,13 +979,18 @@ fn build_func_type_descs<'a>(obj: &VbObject<'a, 'a>) -> HashMap<usize, FuncTypDe
     let Some(priv_obj) = obj.private_object() else {
         return map;
     };
-    let ftd_array_va = priv_obj.func_type_descs_va();
+    let ftd_array_va = match priv_obj.func_type_descs_va() {
+        Ok(v) => v,
+        Err(_) => return map,
+    };
     if ftd_array_va == 0 {
         return map;
     }
 
     // The FuncTypDesc pointer array has one entry per function+variable
-    let total = priv_obj.func_count() as u32 + priv_obj.var_count() as u32;
+    let func_count = priv_obj.func_count().unwrap_or(0) as u32;
+    let var_count = priv_obj.var_count().unwrap_or(0) as u32;
+    let total = func_count + var_count;
     let am = obj.project().address_map();
 
     for i in 0..total {

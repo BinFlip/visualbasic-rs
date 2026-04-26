@@ -22,7 +22,7 @@
 //! 3. The [`CallApiStub`] contains pointers to the DLL name and function name
 //! 4. `DllFunctionCall` resolves via `LoadLibrary`/`GetProcAddress` at runtime
 
-use core::{fmt, str};
+use std::{borrow::Cow, fmt, str};
 
 use crate::{
     addressmap::AddressMap,
@@ -58,64 +58,74 @@ impl<'a> CallApiStub<'a> {
     ///
     /// Returns [`Error::TooShort`] if `data.len() < 8`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "CallApiStub",
-            });
-        }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "CallApiStub",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Virtual address of the DLL name string at offset 0x00.
     #[inline]
-    pub fn library_name_va(&self) -> u32 {
+    pub fn library_name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// Virtual address of the API function name string at offset 0x04.
     #[inline]
-    pub fn function_name_va(&self) -> u32 {
+    pub fn function_name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
-    /// Resolves the DLL library name to a byte string.
+    /// Resolves the DLL library name as a lossy UTF-8 string.
     ///
-    /// # Arguments
-    ///
-    /// * `map` - Address map for VA-to-offset translation.
+    /// Use [`library_name_bytes`](Self::library_name_bytes) for raw bytes.
     ///
     /// # Errors
     ///
     /// Returns an error if the VA cannot be resolved.
-    pub fn library_name(&self, map: &AddressMap<'a>) -> Result<&'a [u8], Error> {
-        let va = self.library_name_va();
-        if va == 0 {
-            return Ok(b"");
-        }
-        let offset = map.va_to_offset(va)?;
-        Ok(read_cstr(map.file(), offset))
+    pub fn library_name(&self, map: &AddressMap<'a>) -> Result<Cow<'a, str>, Error> {
+        Ok(String::from_utf8_lossy(self.library_name_bytes(map)?))
     }
 
-    /// Resolves the API function name to a byte string.
-    ///
-    /// # Arguments
-    ///
-    /// * `map` - Address map for VA-to-offset translation.
+    /// Resolves the DLL library name as raw bytes.
     ///
     /// # Errors
     ///
     /// Returns an error if the VA cannot be resolved.
-    pub fn function_name(&self, map: &AddressMap<'a>) -> Result<&'a [u8], Error> {
-        let va = self.function_name_va();
+    pub fn library_name_bytes(&self, map: &AddressMap<'a>) -> Result<&'a [u8], Error> {
+        let va = self.library_name_va()?;
         if va == 0 {
             return Ok(b"");
         }
         let offset = map.va_to_offset(va)?;
-        Ok(read_cstr(map.file(), offset))
+        read_cstr(map.file(), offset)
+    }
+
+    /// Resolves the API function name as a lossy UTF-8 string.
+    ///
+    /// Use [`function_name_bytes`](Self::function_name_bytes) for raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the VA cannot be resolved.
+    pub fn function_name(&self, map: &AddressMap<'a>) -> Result<Cow<'a, str>, Error> {
+        Ok(String::from_utf8_lossy(self.function_name_bytes(map)?))
+    }
+
+    /// Resolves the API function name as raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the VA cannot be resolved.
+    pub fn function_name_bytes(&self, map: &AddressMap<'a>) -> Result<&'a [u8], Error> {
+        let va = self.function_name_va()?;
+        if va == 0 {
+            return Ok(b"");
+        }
+        let offset = map.va_to_offset(va)?;
+        read_cstr(map.file(), offset)
     }
 }
 
@@ -145,11 +155,16 @@ pub fn resolve_api_stub<'a>(map: &AddressMap<'a>, stub_va: u32) -> Result<CallAp
     // Read enough bytes for push imm32 (5 bytes)
     let stub_data = map.slice_from_va(stub_va, 5)?;
 
-    if stub_data[0] != 0x68 {
-        return Err(Error::EntryPointNotPush { byte: stub_data[0] });
+    let first = *stub_data.first().ok_or(Error::TooShort {
+        expected: 5,
+        actual: stub_data.len(),
+        context: "resolve_api_stub",
+    })?;
+    if first != 0x68 {
+        return Err(Error::EntryPointNotPush { byte: first });
     }
 
-    let call_api_va = read_u32_le(stub_data, 1);
+    let call_api_va = read_u32_le(stub_data, 1)?;
     let call_api_data = map.slice_from_va(call_api_va, CallApiStub::SIZE)?;
     CallApiStub::parse(call_api_data)
 }
@@ -609,8 +624,8 @@ impl fmt::Display for ExternalKind {
 
 /// View over an external component table entry (8 bytes).
 ///
-/// The external table is referenced by `ProjectData.external_table_va()`
-/// with `ProjectData.external_count()` entries. Each entry describes an
+/// The external table is referenced by `ProjectData.external_table_va()?`
+/// with `ProjectData.external_count()?` entries. Each entry describes an
 /// external COM component (OCX, DLL, typelib) used by the project.
 ///
 /// Use [`kind()`](Self::kind) to determine what the entry represents and
@@ -638,21 +653,17 @@ impl<'a> ExternalTableEntry<'a> {
     ///
     /// Returns [`Error::TooShort`] if `data.len() < 8`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "ExternalTableEntry",
-            });
-        }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "ExternalTableEntry",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Raw component type flags at offset 0x00.
     #[inline]
-    pub fn external_type(&self) -> u32 {
+    pub fn external_type(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
@@ -661,14 +672,18 @@ impl<'a> ExternalTableEntry<'a> {
     /// Use this to determine how to interpret [`external_object_va`](Self::external_object_va):
     /// - [`ExternalKind::DeclareFunction`]: VA points to [`ExternalDeclareInfo`]
     /// - [`ExternalKind::TypeLib`]: VA points to [`ExternalTypelibInfo`]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn kind(&self) -> ExternalKind {
-        ExternalKind::from_raw(self.external_type())
+    pub fn kind(&self) -> Result<ExternalKind, Error> {
+        Ok(ExternalKind::from_raw(self.external_type()?))
     }
 
     /// VA of the external component descriptor at offset 0x04.
     #[inline]
-    pub fn external_object_va(&self) -> u32 {
+    pub fn external_object_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
@@ -677,10 +692,10 @@ impl<'a> ExternalTableEntry<'a> {
     /// Returns `None` if the type is not [`ExternalKind::DeclareFunction`]
     /// or the VA cannot be resolved.
     pub fn as_declare(&self, map: &AddressMap<'a>) -> Option<ExternalDeclareInfo<'a>> {
-        if !matches!(self.kind(), ExternalKind::DeclareFunction) {
+        if !matches!(self.kind().ok()?, ExternalKind::DeclareFunction) {
             return None;
         }
-        let va = self.external_object_va();
+        let va = self.external_object_va().ok()?;
         let data = map.slice_from_va(va, ExternalDeclareInfo::SIZE).ok()?;
         ExternalDeclareInfo::parse(data).ok()
     }
@@ -690,7 +705,7 @@ impl<'a> ExternalTableEntry<'a> {
     /// Returns `None` if the type is not [`ExternalKind::TypeLib`]
     /// or the VA cannot be resolved.
     pub fn as_typelib(&self, map: &AddressMap<'a>) -> Option<ExternalTypelibInfo<'a>> {
-        let va = self.external_object_va();
+        let va = self.external_object_va().ok()?;
         let data = map.slice_from_va(va, ExternalTypelibInfo::SIZE).ok()?;
         ExternalTypelibInfo::parse(data).ok()
     }
@@ -719,61 +734,57 @@ impl<'a> ExternalDeclareInfo<'a> {
 
     /// Parses an external declare info from the given byte slice.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "ExternalDeclareInfo",
-            });
-        }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "ExternalDeclareInfo",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// VA of the DLL library name string at offset 0x00.
     #[inline]
-    pub fn library_name_va(&self) -> u32 {
+    pub fn library_name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// VA of the API function name string at offset 0x04.
     #[inline]
-    pub fn function_name_va(&self) -> u32 {
+    pub fn function_name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
     /// Calling convention/flags at offset 0x08 (always 0x00040000).
     #[inline]
-    pub fn flags(&self) -> u32 {
+    pub fn flags(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
     /// VA of the native call stub in the .data section at offset 0x0C.
     #[inline]
-    pub fn native_stub_va(&self) -> u32 {
+    pub fn native_stub_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
     /// Resolves the DLL library name string.
     pub fn library_name(&self, map: &AddressMap<'a>) -> Option<&'a str> {
-        let va = self.library_name_va();
+        let va = self.library_name_va().ok()?;
         if va == 0 {
             return None;
         }
         let off = map.va_to_offset(va).ok()?;
-        let name = read_cstr(map.file(), off);
+        let name = read_cstr(map.file(), off).ok()?;
         str::from_utf8(name).ok()
     }
 
     /// Resolves the API function name string.
     pub fn function_name(&self, map: &AddressMap<'a>) -> Option<&'a str> {
-        let va = self.function_name_va();
+        let va = self.function_name_va().ok()?;
         if va == 0 {
             return None;
         }
         let off = map.va_to_offset(va).ok()?;
-        let name = read_cstr(map.file(), off);
+        let name = read_cstr(map.file(), off).ok()?;
         str::from_utf8(name).ok()
     }
 }
@@ -800,27 +811,23 @@ impl<'a> ExternalTypelibInfo<'a> {
 
     /// Parses an external typelib info from the given byte slice.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "ExternalTypelibInfo",
-            });
-        }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "ExternalTypelibInfo",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// VA to the 16-byte typelib GUID at offset 0x00.
     #[inline]
-    pub fn typelib_guid_va(&self) -> u32 {
+    pub fn typelib_guid_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// Resolves the typelib GUID by following the VA pointer.
     pub fn typelib_guid(&self, map: &AddressMap<'a>) -> Option<Guid> {
-        let va = self.typelib_guid_va();
+        let va = self.typelib_guid_va().ok()?;
         if va == 0 {
             return None;
         }
@@ -887,43 +894,61 @@ impl<'a> ExternalComponentEntry<'a> {
                 context: "ExternalComponentEntry",
             });
         }
-        let size = read_u32_le(data, 0x00) as usize;
-        if size < Self::HEADER_SIZE || size > data.len() {
+        let size = read_u32_le(data, 0x00)? as usize;
+        let bytes = data.get(..size).ok_or(Error::TooShort {
+            expected: size,
+            actual: data.len(),
+            context: "ExternalComponentEntry (entry_size)",
+        })?;
+        if size < Self::HEADER_SIZE {
             return Err(Error::TooShort {
-                expected: size,
-                actual: data.len(),
+                expected: Self::HEADER_SIZE,
+                actual: size,
                 context: "ExternalComponentEntry (entry_size)",
             });
         }
-        Ok(Self {
-            bytes: &data[..size],
-        })
+        Ok(Self { bytes })
     }
 
     /// Total entry size at offset 0x00 (advance to next entry).
     #[inline]
-    pub fn entry_size(&self) -> u32 {
+    pub fn entry_size(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
-    /// OCX/DLL filename (e.g., "Tabctl32.ocx").
+    /// OCX/DLL filename as a lossy UTF-8 string (e.g., `"Tabctl32.ocx"`).
     ///
-    /// Resolved from self-relative offset at +0x28.
-    pub fn ocx_filename(&self) -> &'a [u8] {
+    /// Use [`ocx_filename_bytes`](Self::ocx_filename_bytes) for raw bytes.
+    pub fn ocx_filename(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.ocx_filename_bytes())
+    }
+
+    /// OCX/DLL filename as raw bytes from self-relative offset at +0x28.
+    pub fn ocx_filename_bytes(&self) -> &'a [u8] {
         self.resolve_string(0x28)
     }
 
-    /// ProgID-style name (e.g., "TabDlg.SSTab").
+    /// ProgID-style name as a lossy UTF-8 string (e.g., `"TabDlg.SSTab"`).
     ///
-    /// Resolved from self-relative offset at +0x2C.
-    pub fn prog_id(&self) -> &'a [u8] {
+    /// Use [`prog_id_bytes`](Self::prog_id_bytes) for raw bytes.
+    pub fn prog_id(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.prog_id_bytes())
+    }
+
+    /// ProgID-style name as raw bytes from self-relative offset at +0x2C.
+    pub fn prog_id_bytes(&self) -> &'a [u8] {
         self.resolve_string(0x2C)
     }
 
-    /// Short class name (e.g., "SSTab").
+    /// Short class name as a lossy UTF-8 string (e.g., `"SSTab"`).
     ///
-    /// Resolved from self-relative offset at +0x30.
-    pub fn class_name(&self) -> &'a [u8] {
+    /// Use [`class_name_bytes`](Self::class_name_bytes) for raw bytes.
+    pub fn class_name(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.class_name_bytes())
+    }
+
+    /// Short class name as raw bytes from self-relative offset at +0x30.
+    pub fn class_name_bytes(&self) -> &'a [u8] {
         self.resolve_string(0x30)
     }
 
@@ -931,25 +956,36 @@ impl<'a> ExternalComponentEntry<'a> {
     ///
     /// Bit 7 = uses special load path in `LoadExternalsAndGUIObjects`.
     pub fn component_flags(&self) -> Option<u8> {
-        let off = read_u32_le(self.bytes, 0x04) as usize;
-        if off == 0 || off + 0x87 > self.bytes.len() {
+        let off = read_u32_le(self.bytes, 0x04).ok()? as usize;
+        let end = off.checked_add(0x87)?;
+        if off == 0 || end > self.bytes.len() {
             return None;
         }
-        Some(self.bytes[off + 0x86])
+        let flags_off = off.checked_add(0x86)?;
+        self.bytes.get(flags_off).copied()
     }
 
     /// Number of event handlers from component_info+0x92.
     pub fn event_count(&self) -> u16 {
-        let off = read_u32_le(self.bytes, 0x04) as usize;
-        if off == 0 || off + 0x94 > self.bytes.len() {
+        let Ok(off_raw) = read_u32_le(self.bytes, 0x04) else {
+            return 0;
+        };
+        let off = off_raw as usize;
+        let Some(end) = off.checked_add(0x94) else {
+            return 0;
+        };
+        if off == 0 || end > self.bytes.len() {
             return 0;
         }
-        read_u16_le(self.bytes, off + 0x92)
+        let Some(field_off) = off.checked_add(0x92) else {
+            return 0;
+        };
+        read_u16_le(self.bytes, field_off).unwrap_or(0)
     }
 
     /// Component info block size (direct value at +0x20).
     #[inline]
-    pub fn info_block_size(&self) -> u32 {
+    pub fn info_block_size(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x20)
     }
 
@@ -958,7 +994,10 @@ impl<'a> ExternalComponentEntry<'a> {
     /// Each event is a null-terminated ASCII string. The names follow
     /// the 0x18-byte event array entries sequentially.
     pub fn event_names(&self) -> Vec<&'a str> {
-        let evt_off = read_u32_le(self.bytes, 0x18) as usize;
+        let Ok(evt_off_raw) = read_u32_le(self.bytes, 0x18) else {
+            return Vec::new();
+        };
+        let evt_off = evt_off_raw as usize;
         if evt_off == 0 {
             return Vec::new();
         }
@@ -967,17 +1006,27 @@ impl<'a> ExternalComponentEntry<'a> {
             return Vec::new();
         }
         // Names start after the array entries
-        let names_start = evt_off + count * Self::EVENT_ENTRY_SIZE;
+        let Some(array_bytes) = count.checked_mul(Self::EVENT_ENTRY_SIZE) else {
+            return Vec::new();
+        };
+        let Some(names_start) = evt_off.checked_add(array_bytes) else {
+            return Vec::new();
+        };
         if names_start >= self.bytes.len() {
             return Vec::new();
         }
         let mut names = Vec::with_capacity(count);
         let mut pos = names_start;
         for _ in 0..count {
-            let name = read_cstr(self.bytes, pos);
+            let Ok(name) = read_cstr(self.bytes, pos) else {
+                break;
+            };
             let s = str::from_utf8(name).unwrap_or("?");
             names.push(s);
-            pos += name.len() + 1;
+            let Some(next) = pos.checked_add(name.len()).and_then(|p| p.checked_add(1)) else {
+                break;
+            };
+            pos = next;
             if pos >= self.bytes.len() {
                 break;
             }
@@ -987,18 +1036,21 @@ impl<'a> ExternalComponentEntry<'a> {
 
     /// Resolves a self-relative offset to a null-terminated string.
     fn resolve_string(&self, header_offset: usize) -> &'a [u8] {
-        let off = read_u32_le(self.bytes, header_offset) as usize;
+        let Ok(off_raw) = read_u32_le(self.bytes, header_offset) else {
+            return &[];
+        };
+        let off = off_raw as usize;
         if off == 0 || off >= self.bytes.len() {
             return &[];
         }
-        read_cstr(self.bytes, off)
+        read_cstr(self.bytes, off).unwrap_or(&[])
     }
 }
 
 impl fmt::Display for ExternalComponentEntry<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let filename = str::from_utf8(self.ocx_filename()).unwrap_or("?");
-        let class = str::from_utf8(self.class_name()).unwrap_or("?");
+        let filename = self.ocx_filename();
+        let class = self.class_name();
         write!(f, "{filename}!{class}")?;
         let ec = self.event_count();
         if ec > 0 {
@@ -1041,13 +1093,14 @@ impl<'a> Iterator for ExternalComponentIter<'a> {
         if self.remaining == 0 || self.pos >= self.data.len() {
             return None;
         }
-        self.remaining -= 1;
-        let entry = ExternalComponentEntry::parse(&self.data[self.pos..]).ok()?;
-        let size = entry.entry_size() as usize;
+        self.remaining = self.remaining.saturating_sub(1);
+        let rest = self.data.get(self.pos..)?;
+        let entry = ExternalComponentEntry::parse(rest).ok()?;
+        let size = entry.entry_size().ok()? as usize;
         if size == 0 {
             return None;
         }
-        self.pos += size;
+        self.pos = self.pos.checked_add(size)?;
         Some(entry)
     }
 }
@@ -1055,6 +1108,7 @@ impl<'a> Iterator for ExternalComponentIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::addressmap::SectionEntry;
 
     #[test]
     fn test_call_api_stub_parse() {
@@ -1062,8 +1116,8 @@ mod tests {
         data[0x00..0x04].copy_from_slice(&0x00401000u32.to_le_bytes());
         data[0x04..0x08].copy_from_slice(&0x00402000u32.to_le_bytes());
         let stub = CallApiStub::parse(&data).unwrap();
-        assert_eq!(stub.library_name_va(), 0x00401000);
-        assert_eq!(stub.function_name_va(), 0x00402000);
+        assert_eq!(stub.library_name_va().unwrap(), 0x00401000);
+        assert_eq!(stub.function_name_va().unwrap(), 0x00402000);
     }
 
     #[test]
@@ -1079,14 +1133,12 @@ mod tests {
     fn test_call_api_stub_zero_va() {
         let data = vec![0u8; CallApiStub::SIZE];
         let stub = CallApiStub::parse(&data).unwrap();
-        assert_eq!(stub.library_name_va(), 0);
-        assert_eq!(stub.function_name_va(), 0);
+        assert_eq!(stub.library_name_va().unwrap(), 0);
+        assert_eq!(stub.function_name_va().unwrap(), 0);
     }
 
     #[test]
     fn test_resolve_api_stub_valid() {
-        use crate::addressmap::SectionEntry;
-
         // Build a fake file with:
         // - At offset 0x200 (RVA 0x1000): push 0x00401100; jmp ...
         // - At offset 0x300 (RVA 0x1100): CallApiStub with lib_va and func_va
@@ -1118,14 +1170,14 @@ mod tests {
         );
 
         let stub = resolve_api_stub(&map, 0x00401000).unwrap();
-        assert_eq!(stub.library_name(&map).unwrap(), b"kernel32.dll");
-        assert_eq!(stub.function_name(&map).unwrap(), b"GetTickCount");
+        assert_eq!(stub.library_name_bytes(&map).unwrap(), b"kernel32.dll");
+        assert_eq!(stub.function_name_bytes(&map).unwrap(), b"GetTickCount");
+        assert_eq!(stub.library_name(&map).unwrap(), "kernel32.dll");
+        assert_eq!(stub.function_name(&map).unwrap(), "GetTickCount");
     }
 
     #[test]
     fn test_resolve_api_stub_not_push() {
-        use crate::addressmap::SectionEntry;
-
         let mut file = vec![0u8; 0x500];
         file[0x200] = 0xCC; // int3 instead of push
 

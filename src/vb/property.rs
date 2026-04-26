@@ -8,7 +8,7 @@
 //! MSVBVM60.DLL, traced through the compiler's `WritePropertyStream`
 //! function (VB6.EXE `sub_457E57`).
 
-use core::fmt;
+use std::fmt;
 
 use crate::{
     VbProject,
@@ -270,8 +270,8 @@ impl ControlPosition {
         }
         Some((
             Self {
-                left: read_u32_le(data, 0),
-                top: read_u32_le(data, 4),
+                left: read_u32_le(data, 0).ok()?,
+                top: read_u32_le(data, 4).ok()?,
             },
             8,
         ))
@@ -318,10 +318,10 @@ impl ClientRect {
         }
         Some((
             Self {
-                left: read_u32_le(data, 0),
-                top: read_u32_le(data, 4),
-                width: read_u32_le(data, 8),
-                height: read_u32_le(data, 12),
+                left: read_u32_le(data, 0).ok()?,
+                top: read_u32_le(data, 4).ok()?,
+                width: read_u32_le(data, 8).ok()?,
+                height: read_u32_le(data, 12).ok()?,
             },
             16,
         ))
@@ -374,20 +374,25 @@ impl FontDescriptor {
         if data.len() < 11 {
             return None;
         }
-        let weight = read_u16_le(data, 4);
-        let raw_size = read_u32_le(data, 6);
-        let name_len = data[10] as usize;
-        let mut consumed = 11;
-        let name = if name_len > 0 && consumed + name_len <= data.len() {
-            let s = String::from_utf8_lossy(&data[consumed..consumed + name_len]).into_owned();
-            consumed += name_len;
-            s
+        let weight = read_u16_le(data, 4).ok()?;
+        let raw_size = read_u32_le(data, 6).ok()?;
+        let name_len = (*data.get(10)?) as usize;
+        let mut consumed: usize = 11;
+        let name = if name_len > 0 {
+            let end = consumed.checked_add(name_len)?;
+            if end <= data.len() {
+                let s = String::from_utf8_lossy(data.get(consumed..end)?).into_owned();
+                consumed = end;
+                s
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         };
         Some((
             Self {
-                size_pt: raw_size / 10000,
+                size_pt: raw_size.checked_div(10000).unwrap_or(0),
                 bold: weight >= 700,
                 weight,
                 name,
@@ -433,7 +438,7 @@ impl PictureData {
         if data.len() < 4 {
             return None;
         }
-        let size = read_u32_le(data, 0);
+        let size = read_u32_le(data, 0).ok()?;
         if size == 0xFFFFFFFF {
             return Some((
                 Self {
@@ -445,18 +450,21 @@ impl PictureData {
             ));
         }
         let total = size as usize;
-        if 4 + total > data.len() {
+        let consumed = 4usize.checked_add(total)?;
+        if consumed > data.len() {
             return None;
         }
-        let bmp_off = 4 + 8; // OLE header is 8 bytes, BMP magic at data start
-        let is_bmp = bmp_off + 1 < data.len() && data[bmp_off] == b'B' && data[bmp_off + 1] == b'M';
+        // OLE header is 8 bytes, BMP magic at data start (offset 12 from blob start)
+        let bmp_off: usize = 12;
+        let is_bmp =
+            data.get(bmp_off) == Some(&b'B') && data.get(bmp_off.checked_add(1)?) == Some(&b'M');
         Some((
             Self {
                 size,
                 is_bmp,
                 is_default: false,
             },
-            4 + total,
+            consumed,
         ))
     }
 }
@@ -480,54 +488,67 @@ impl StdDataFormat {
         if data.len() < 0x28 {
             return None;
         }
-        if read_u32_le(data, 0) != STD_DATA_FORMAT_MAGIC {
+        if read_u32_le(data, 0).ok()? != STD_DATA_FORMAT_MAGIC {
             return None;
         }
-        let version = read_u32_le(data, 4);
-        let format_type = read_u32_le(data, 8);
-        let fmt_str_len = read_u32_le(data, 0x14) as usize;
-        let has_custom = read_u32_le(data, 0x18);
-        let true_val_len = read_u32_le(data, 0x1C) as usize;
-        let false_val_len = read_u32_le(data, 0x20) as usize;
-        let null_val_len = read_u32_le(data, 0x24) as usize;
+        let version = read_u32_le(data, 4).ok()?;
+        let format_type = read_u32_le(data, 8).ok()?;
+        let fmt_str_len = read_u32_le(data, 0x14).ok()? as usize;
+        let has_custom = read_u32_le(data, 0x18).ok()?;
+        let true_val_len = read_u32_le(data, 0x1C).ok()? as usize;
+        let false_val_len = read_u32_le(data, 0x20).ok()? as usize;
+        let null_val_len = read_u32_le(data, 0x24).ok()? as usize;
 
-        let mut off = 0x28;
+        let mut off: usize = 0x28;
 
         // Format string (UTF-16LE)
-        let fmt_byte_len = fmt_str_len * 2;
-        let format = if fmt_str_len > 0 && off + fmt_byte_len <= data.len() {
+        let fmt_byte_len = fmt_str_len.checked_mul(2)?;
+        let fmt_end = off.checked_add(fmt_byte_len)?;
+        let format = if fmt_str_len > 0 && fmt_end <= data.len() {
             let utf16: Vec<u16> = (0..fmt_str_len)
-                .map(|j| read_u16_le(data, off + j * 2))
-                .collect();
-            off += fmt_byte_len;
+                .map(|j| {
+                    let pos = off.checked_add(j.checked_mul(2)?)?;
+                    read_u16_le(data, pos).ok()
+                })
+                .collect::<Option<Vec<_>>>()?;
+            off = fmt_end;
             String::from_utf16_lossy(&utf16)
         } else {
-            off += fmt_byte_len;
+            off = fmt_end;
             String::new()
         };
 
         // Custom values (3x VARIANT + optional BSTRs)
         if has_custom != 0 {
-            off += 0x10 + true_val_len * 2; // TrueValue
-            off += 0x10 + false_val_len * 2; // FalseValue
-            off += 0x10 + null_val_len * 2; // NullValue
+            // TrueValue: 0x10 header + (len * 2) bytes
+            off = off
+                .checked_add(0x10)?
+                .checked_add(true_val_len.checked_mul(2)?)?;
+            off = off
+                .checked_add(0x10)?
+                .checked_add(false_val_len.checked_mul(2)?)?;
+            off = off
+                .checked_add(0x10)?
+                .checked_add(null_val_len.checked_mul(2)?)?;
         }
 
         // Trailer (version-dependent)
-        let first_day_of_week = if version >= 0x60001 && off + 4 <= data.len() {
-            let v = read_u32_le(data, off);
-            off += 4;
-            Some(v)
-        } else {
-            None
-        };
-        let first_week_of_year = if version >= 0x60002 && off + 4 <= data.len() {
-            let v = read_u32_le(data, off);
-            off += 4;
-            Some(v)
-        } else {
-            None
-        };
+        let first_day_of_week =
+            if version >= 0x60001 && off.checked_add(4).map(|e| e <= data.len()).unwrap_or(false) {
+                let v = read_u32_le(data, off).ok()?;
+                off = off.checked_add(4)?;
+                Some(v)
+            } else {
+                None
+            };
+        let first_week_of_year =
+            if version >= 0x60002 && off.checked_add(4).map(|e| e <= data.len()).unwrap_or(false) {
+                let v = read_u32_le(data, off).ok()?;
+                off = off.checked_add(4)?;
+                Some(v)
+            } else {
+                None
+            };
 
         Some((
             Self {
@@ -567,12 +588,13 @@ fn parse_ascii_str(data: &[u8]) -> Option<(String, usize)> {
     if data.len() < 2 {
         return None;
     }
-    let len = read_u16_le(data, 0) as usize;
-    if 2 + len >= data.len() {
+    let len = read_u16_le(data, 0).ok()? as usize;
+    let end = 2usize.checked_add(len)?;
+    if end >= data.len() {
         return None;
     }
-    let s = String::from_utf8_lossy(&data[2..2 + len]).into_owned();
-    Some((s, 2 + len + 1)) // +1 null terminator
+    let s = String::from_utf8_lossy(data.get(2..end)?).into_owned();
+    Some((s, end.checked_add(1)?)) // +1 null terminator
 }
 
 /// Parses a VB6 UTF-16LE string from a property stream.
@@ -584,16 +606,20 @@ fn parse_utf16_str(data: &[u8]) -> Option<(String, usize)> {
     if data.len() < 2 {
         return None;
     }
-    let char_count = read_u16_le(data, 0) as usize;
-    let byte_len = char_count * 2;
-    if 2 + byte_len > data.len() {
+    let char_count = read_u16_le(data, 0).ok()? as usize;
+    let byte_len = char_count.checked_mul(2)?;
+    let total = 2usize.checked_add(byte_len)?;
+    if total > data.len() {
         return None;
     }
     let utf16: Vec<u16> = (0..char_count)
-        .map(|j| read_u16_le(data, 2 + j * 2))
-        .collect();
+        .map(|j| {
+            let pos = 2usize.checked_add(j.checked_mul(2)?)?;
+            read_u16_le(data, pos).ok()
+        })
+        .collect::<Option<Vec<_>>>()?;
     let s = String::from_utf16_lossy(&utf16);
-    Some((s, 2 + byte_len))
+    Some((s, total))
 }
 
 /// A decoded property value from a form binary property stream.
@@ -690,63 +716,54 @@ impl<'a> PropertyIter<'a> {
     fn decode_value(&mut self, ser_type: u8, callback_bytes: i8) -> Option<PropertyValue> {
         let d = self.data;
         let p = self.pos;
+        let rest = d.get(p..)?;
         match ser_type {
             0 => Some(PropertyValue::Flag),
 
             // ASCII string (Name, String, DataMember)
             1 | 18 | 26 | 33 => {
-                let (s, consumed) = parse_ascii_str(&d[p..])?;
-                self.pos += consumed;
+                let (s, consumed) = parse_ascii_str(rest)?;
+                self.pos = self.pos.checked_add(consumed)?;
                 Some(PropertyValue::Str(s))
             }
 
             // Int16
             2 | 17 => {
-                if p + 2 > d.len() {
-                    return None;
-                }
-                self.pos += 2;
-                Some(PropertyValue::Int16(read_i16_le(d, p)))
+                let v = read_i16_le(d, p).ok()?;
+                self.pos = self.pos.checked_add(2)?;
+                Some(PropertyValue::Int16(v))
             }
 
             // Long
             3 => {
-                if p + 4 > d.len() {
-                    return None;
-                }
-                self.pos += 4;
-                Some(PropertyValue::Long(read_u32_le(d, p)))
+                let v = read_u32_le(d, p).ok()?;
+                self.pos = self.pos.checked_add(4)?;
+                Some(PropertyValue::Long(v))
             }
 
             // Byte
             4 => {
-                if p >= d.len() {
-                    return None;
-                }
-                self.pos += 1;
-                Some(PropertyValue::Byte(d[p]))
+                let v = *rest.first()?;
+                self.pos = self.pos.checked_add(1)?;
+                Some(PropertyValue::Byte(v))
             }
 
             // OLE_COLOR
             5 => {
-                if p + 4 > d.len() {
-                    return None;
-                }
-                self.pos += 4;
-                Some(PropertyValue::Color(read_u32_le(d, p)))
+                let v = read_u32_le(d, p).ok()?;
+                self.pos = self.pos.checked_add(4)?;
+                Some(PropertyValue::Color(v))
             }
 
             // Enum/Byte + optional callback trailing data
             6 => {
-                if p >= d.len() {
-                    return None;
-                }
-                let v = d[p];
-                self.pos += 1;
+                let v = *rest.first()?;
+                self.pos = self.pos.checked_add(1)?;
                 if callback_bytes > 0 {
                     let skip = callback_bytes as usize;
-                    if self.pos + skip <= d.len() {
-                        self.pos += skip;
+                    let new_pos = self.pos.checked_add(skip)?;
+                    if new_pos <= d.len() {
+                        self.pos = new_pos;
                     }
                 }
                 Some(PropertyValue::Byte(v))
@@ -754,61 +771,55 @@ impl<'a> PropertyIter<'a> {
 
             // Single/Currency/Twips Y/H (4 bytes, displayed as Long)
             7 | 10 | 11 => {
-                if p + 4 > d.len() {
-                    return None;
-                }
-                self.pos += 4;
-                Some(PropertyValue::Long(read_u32_le(d, p)))
+                let v = read_u32_le(d, p).ok()?;
+                self.pos = self.pos.checked_add(4)?;
+                Some(PropertyValue::Long(v))
             }
 
             // Twips X/W (4 bytes + optional callback for Position/ClientRect)
-            8 | 9 => {
-                if p + 4 > d.len() {
-                    return None;
+            8 | 9 => match callback_bytes {
+                4 => {
+                    let (pos, consumed) = ControlPosition::parse(rest)?;
+                    self.pos = self.pos.checked_add(consumed)?;
+                    Some(PropertyValue::Position(pos))
                 }
-                match callback_bytes {
-                    4 => {
-                        let (pos, consumed) = ControlPosition::parse(&d[p..])?;
-                        self.pos += consumed;
-                        Some(PropertyValue::Position(pos))
-                    }
-                    12 => {
-                        let (rect, consumed) = ClientRect::parse(&d[p..])?;
-                        self.pos += consumed;
-                        Some(PropertyValue::ClientRect(rect))
-                    }
-                    _ => {
-                        self.pos += 4;
-                        Some(PropertyValue::Long(read_u32_le(d, p)))
-                    }
+                12 => {
+                    let (rect, consumed) = ClientRect::parse(rest)?;
+                    self.pos = self.pos.checked_add(consumed)?;
+                    Some(PropertyValue::ClientRect(rect))
                 }
-            }
+                _ => {
+                    let v = read_u32_le(d, p).ok()?;
+                    self.pos = self.pos.checked_add(4)?;
+                    Some(PropertyValue::Long(v))
+                }
+            },
 
             // UTF-16LE string (Tag, Connect, DatabaseName, RecordSource)
             13 => {
-                let (s, consumed) = parse_utf16_str(&d[p..])?;
-                self.pos += consumed;
+                let (s, consumed) = parse_utf16_str(rest)?;
+                self.pos = self.pos.checked_add(consumed)?;
                 Some(PropertyValue::TagStr(s))
             }
 
             // Font descriptor (11B header + variable name callback)
             20 => {
-                let (font, consumed) = FontDescriptor::parse(&d[p..])?;
-                self.pos += consumed;
+                let (font, consumed) = FontDescriptor::parse(rest)?;
+                self.pos = self.pos.checked_add(consumed)?;
                 Some(PropertyValue::Font(font))
             }
 
             // Picture / Icon
             21 => {
-                let (pic, consumed) = PictureData::parse(&d[p..])?;
-                self.pos += consumed;
+                let (pic, consumed) = PictureData::parse(rest)?;
+                self.pos = self.pos.checked_add(consumed)?;
                 Some(PropertyValue::Picture(pic))
             }
 
             // StdDataFormat IPersistStream blob
             22 => {
-                let (df, consumed) = StdDataFormat::parse(&d[p..])?;
-                self.pos += consumed;
+                let (df, consumed) = StdDataFormat::parse(rest)?;
+                self.pos = self.pos.checked_add(consumed)?;
                 Some(PropertyValue::DataFormat(df))
             }
 
@@ -822,10 +833,7 @@ impl<'a> Iterator for PropertyIter<'a> {
     type Item = Property;
 
     fn next(&mut self) -> Option<Property> {
-        if self.pos >= self.data.len() {
-            return None;
-        }
-        let opcode = self.data[self.pos];
+        let opcode = *self.data.get(self.pos)?;
         if opcode == 0xFF {
             return None;
         }
@@ -834,7 +842,7 @@ impl<'a> Iterator for PropertyIter<'a> {
 
         // Known property — decode via ser_type dispatch
         if let Some(desc) = property_descriptor(self.ctype, opcode) {
-            self.pos += 1; // consume opcode byte
+            self.pos = self.pos.checked_add(1)?; // consume opcode byte
             let value_offset = self.pos;
 
             if desc.prop_type == PropType::Flag {
@@ -854,18 +862,16 @@ impl<'a> Iterator for PropertyIter<'a> {
         }
 
         // Unknown opcode — try lookahead to skip flag-like unknowns
-        self.pos += 1;
-        if self.pos < self.data.len() {
-            let next = self.data[self.pos];
-            if next == 0xFF || property_info(self.ctype, next).is_some() {
-                let unknown_name: &'static str =
-                    Box::leak(format!("?0x{opcode:02X}").into_boxed_str());
-                return Some(Property {
-                    name: unknown_name,
-                    value: PropertyValue::Flag,
-                    offset: opcode_offset,
-                });
-            }
+        self.pos = self.pos.checked_add(1)?;
+        if let Some(&next) = self.data.get(self.pos)
+            && (next == 0xFF || property_info(self.ctype, next).is_some())
+        {
+            let unknown_name: &'static str = Box::leak(format!("?0x{opcode:02X}").into_boxed_str());
+            return Some(Property {
+                name: unknown_name,
+                value: PropertyValue::Flag,
+                offset: opcode_offset,
+            });
         }
         None
     }
@@ -888,16 +894,26 @@ pub fn decode_form_type(
             // Check if this is actually a PropertyPage by matching the form
             // Name against project objects. The compiler writes using the
             // object's own TypeInfo, which may differ from the GUI entry.
-            if form_props.len() > 3 && form_props[0] == 0x00 {
-                let nlen = u16::from_le_bytes([form_props[1], form_props[2]]) as usize;
-                if 3 + nlen <= form_props.len() {
-                    let form_name = &form_props[3..3 + nlen];
-                    for other_obj in project.objects() {
+            if form_props.len() > 3 && form_props.first() == Some(&0x00) {
+                let Ok(nlen) = read_u16_le(form_props, 1) else {
+                    return FormControlType::UserControl;
+                };
+                let nlen = nlen as usize;
+                let Some(name_end) = 3usize.checked_add(nlen) else {
+                    return FormControlType::UserControl;
+                };
+                if let Some(form_name) = form_props.get(3..name_end) {
+                    let Ok(objects) = project.objects() else {
+                        return FormControlType::UserControl;
+                    };
+                    for other_obj in objects {
                         if let Ok(other_obj) = other_obj
-                            && let Ok(n) = other_obj.name()
+                            && let Ok(n) = other_obj.name_bytes()
                             && n == form_name
                         {
-                            let otype = other_obj.descriptor().object_type_raw();
+                            let Ok(otype) = other_obj.descriptor().object_type_raw() else {
+                                break;
+                            };
                             // Designer objects (flag 0x02) that aren't UserControl
                             // (flag 0x20) are PropertyPages
                             if otype & 0x02 != 0 && otype & 0x20 == 0 {

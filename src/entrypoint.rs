@@ -23,7 +23,7 @@
 //! This module tries the EXE pattern first, then falls back to scanning
 //! for the `"VB5!"` magic with ProjectData validation.
 
-use crate::{addressmap::AddressMap, error::Error, util::read_u32_le};
+use crate::{addressmap::AddressMap, error::Error};
 
 /// Minimum number of bytes needed at the entry point to extract the VBHeader VA.
 const MIN_ENTRY_BYTES: usize = 5;
@@ -56,14 +56,15 @@ const VB5_MAGIC: &[u8; 4] = b"VB5!";
 pub fn extract_vb_header_va(map: &AddressMap<'_>, entry_point_rva: u32) -> Result<u32, Error> {
     // Method 1: EXE entry point — push imm32 (0x68 xx xx xx xx)
     if let Ok(code) = map.slice_from_rva(entry_point_rva, MIN_ENTRY_BYTES)
-        && code[0] == PUSH_IMM32
+        && let Some(&[PUSH_IMM32, b0, b1, b2, b3]) = code.first_chunk::<5>()
     {
-        return Ok(read_u32_le(code, 1));
+        return Ok(u32::from_le_bytes([b0, b1, b2, b3]));
     }
 
     let byte = map
         .slice_from_rva(entry_point_rva, 1)
-        .map(|c| c[0])
+        .ok()
+        .and_then(|c| c.first().copied())
         .unwrap_or(0);
     Err(Error::EntryPointNotPush { byte })
 }
@@ -81,19 +82,20 @@ pub fn extract_vb_header_va_from_exports(
     exports: &[goblin::pe::export::Export<'_>],
 ) -> Option<u32> {
     for export in exports {
-        let rva = export.rva as u32;
+        let rva = u32::try_from(export.rva).ok()?;
         // Read 6 bytes: pop eax (0x58) + push imm32 (0x68 xx xx xx xx)
         let Ok(code) = map.slice_from_rva(rva, 6) else {
             continue;
         };
-        if code[0] == 0x58 && code[1] == PUSH_IMM32 {
-            let candidate = read_u32_le(code, 2);
-            // Validate: should point to VB5! magic
-            if let Ok(magic) = map.slice_from_va(candidate, 4)
-                && magic.starts_with(VB5_MAGIC)
-            {
-                return Some(candidate);
-            }
+        let Some(&[0x58, PUSH_IMM32, b0, b1, b2, b3]) = code.first_chunk::<6>() else {
+            continue;
+        };
+        let candidate = u32::from_le_bytes([b0, b1, b2, b3]);
+        // Validate: should point to VB5! magic
+        if let Ok(magic) = map.slice_from_va(candidate, 4)
+            && magic.starts_with(VB5_MAGIC)
+        {
+            return Some(candidate);
         }
     }
     None

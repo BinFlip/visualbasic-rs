@@ -26,6 +26,24 @@ pub(crate) struct SectionEntry {
     pub raw_data_size: u32,
 }
 
+impl SectionEntry {
+    /// Inclusive RVA range upper bound, saturating on overflow.
+    ///
+    /// Malformed PE section headers can declare absurdly large sizes; rather
+    /// than panic, we cap the section at `u32::MAX`. RVAs landing past the
+    /// real raw data still surface via the BSS/raw-size check downstream.
+    #[inline]
+    fn rva_end(self) -> u32 {
+        self.virtual_address.saturating_add(self.virtual_size)
+    }
+
+    /// Inclusive raw-offset upper bound, saturating on overflow.
+    #[inline]
+    fn raw_end(self) -> u32 {
+        self.raw_data_offset.saturating_add(self.raw_data_size)
+    }
+}
+
 /// Address translation context for a PE file.
 ///
 /// Created once during initial parsing and threaded through all
@@ -137,12 +155,18 @@ impl<'a> AddressMap<'a> {
     ///   (virtual size exceeds raw data size) with no file backing.
     pub fn rva_to_offset(&self, rva: u32) -> Result<usize, Error> {
         for s in &self.sections {
-            if rva >= s.virtual_address && rva < s.virtual_address + s.virtual_size {
-                let offset_within = rva - s.virtual_address;
+            if rva >= s.virtual_address && rva < s.rva_end() {
+                // rva >= s.virtual_address checked above
+                let offset_within = rva.wrapping_sub(s.virtual_address);
                 if offset_within >= s.raw_data_size {
                     return Err(Error::RvaInBssRegion { rva });
                 }
-                return Ok((s.raw_data_offset + offset_within) as usize);
+                let raw = s.raw_data_offset.checked_add(offset_within).ok_or(
+                    Error::ArithmeticOverflow {
+                        context: "rva_to_offset raw_data_offset + offset_within",
+                    },
+                )?;
+                return Ok(raw as usize);
             }
         }
         Err(Error::RvaNotMapped { rva })
@@ -174,13 +198,14 @@ impl<'a> AddressMap<'a> {
     /// Converts a file offset to a virtual address.
     ///
     /// Returns `None` if the offset does not fall within any section's
-    /// raw data range.
+    /// raw data range, or if the resulting VA would overflow `u32`.
     pub fn offset_to_va(&self, offset: usize) -> Option<u32> {
-        let offset = offset as u32;
+        let offset = u32::try_from(offset).ok()?;
         for s in &self.sections {
-            if offset >= s.raw_data_offset && offset < s.raw_data_offset + s.raw_data_size {
-                let rva = s.virtual_address + (offset - s.raw_data_offset);
-                return Some(self.image_base + rva);
+            if offset >= s.raw_data_offset && offset < s.raw_end() {
+                let within = offset.checked_sub(s.raw_data_offset)?;
+                let rva = s.virtual_address.checked_add(within)?;
+                return self.image_base.checked_add(rva);
             }
         }
         None
@@ -225,7 +250,11 @@ impl<'a> AddressMap<'a> {
                 context: "slice_from_va",
             });
         }
-        Ok(&self.file[offset..])
+        self.file.get(offset..).ok_or(Error::TooShort {
+            expected: min_len,
+            actual: remaining,
+            context: "slice_from_va",
+        })
     }
 
     /// Returns a byte slice starting at the given RVA with at least `min_len` bytes.
@@ -253,7 +282,11 @@ impl<'a> AddressMap<'a> {
                 context: "slice_from_rva",
             });
         }
-        Ok(&self.file[offset..])
+        self.file.get(offset..).ok_or(Error::TooShort {
+            expected: min_len,
+            actual: remaining,
+            context: "slice_from_rva",
+        })
     }
 }
 

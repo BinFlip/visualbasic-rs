@@ -64,20 +64,23 @@ impl<'a> PublicObjectDescriptor<'a> {
                 context: "PublicObjectDescriptor",
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "PublicObjectDescriptor",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Virtual address of the [`ObjectInfo`] structure at offset 0x00.
     #[inline]
-    pub fn object_info_va(&self) -> u32 {
+    pub fn object_info_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// Reserved field at offset 0x04 (always -1).
     #[inline]
-    pub fn reserved(&self) -> u32 {
+    pub fn reserved(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
@@ -86,7 +89,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// Points to a [`PublicVarTable`](super::publicbytes::PublicVarTable)
     /// structure with variable type codes and frame offsets.
     #[inline]
-    pub fn public_bytes_va(&self) -> u32 {
+    pub fn public_bytes_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
@@ -94,7 +97,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     ///
     /// Always 0 in tested samples (no static var descriptors observed).
     #[inline]
-    pub fn static_bytes_va(&self) -> u32 {
+    pub fn static_bytes_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
@@ -105,7 +108,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// `ObjectInfo.object_data_va` (the 8-byte gap is a runtime header).
     /// Zero for forms and classes.
     #[inline]
-    pub fn module_public_va(&self) -> u32 {
+    pub fn module_public_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x10)
     }
 
@@ -113,7 +116,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     ///
     /// Always 0 in tested samples.
     #[inline]
-    pub fn module_static_va(&self) -> u32 {
+    pub fn module_static_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x14)
     }
 
@@ -122,7 +125,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// Points to a null-terminated ANSI string (e.g., `"Form1"`,
     /// `"modUtil"`, `"Cls_Zip"`).
     #[inline]
-    pub fn object_name_va(&self) -> u32 {
+    pub fn object_name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x18)
     }
 
@@ -131,7 +134,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// Includes all methods (event handlers, subs, functions, properties).
     /// Range observed: 0–45.
     #[inline]
-    pub fn method_count(&self) -> u32 {
+    pub fn method_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x1C)
     }
 
@@ -142,7 +145,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// for standard modules. When `method_count() == 0`, this value
     /// may be uninitialized garbage.
     #[inline]
-    pub fn method_names_va(&self) -> u32 {
+    pub fn method_names_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x20)
     }
 
@@ -151,7 +154,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// Always `0x0000FFFF` (sentinel for "no static vars") in all
     /// tested samples.
     #[inline]
-    pub fn static_vars_offset(&self) -> u32 {
+    pub fn static_vars_offset(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 
@@ -166,7 +169,7 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// definitions. The compiler assembles these from the internal type
     /// code at `*(*object + 0x37)` in `BuildPerObject`.
     #[inline]
-    pub fn object_type_raw(&self) -> u32 {
+    pub fn object_type_raw(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x28)
     }
 
@@ -175,32 +178,41 @@ impl<'a> PublicObjectDescriptor<'a> {
     /// Note: this flag is set for ALL object types in tested samples.
     /// The actual presence of `OptionalObjectInfo` is determined
     /// spatially (gap between `ObjectInfo` and constants table).
+    ///
+    /// Returns `false` if the underlying type field cannot be read.
     #[inline]
     pub fn has_optional_info(&self) -> bool {
-        self.object_type_raw() & 0x01 != 0
+        self.object_type_raw().unwrap_or(0) & 0x01 != 0
     }
 
     /// Returns `true` if this is a class module (low byte `0x03`).
+    ///
+    /// Returns `false` if the underlying type field cannot be read.
     #[inline]
     pub fn is_class(&self) -> bool {
-        self.object_type_raw() & 0x02 != 0 && self.object_type_raw() & 0x80 == 0
+        let raw = self.object_type_raw().unwrap_or(0);
+        raw & 0x02 != 0 && raw & 0x80 == 0
     }
 
     /// Returns `true` if this is a form or UserDocument (low byte `0x83`).
+    ///
+    /// Returns `false` if the underlying type field cannot be read.
     #[inline]
     pub fn is_form(&self) -> bool {
-        self.object_type_raw() & 0x82 == 0x82
+        self.object_type_raw().unwrap_or(0) & 0x82 == 0x82
     }
 
     /// Returns `true` if this is a standard module (low byte `0x01`).
+    ///
+    /// Returns `false` if the underlying type field cannot be read.
     #[inline]
     pub fn is_module(&self) -> bool {
-        self.object_type_raw() & 0x82 == 0x00
+        self.object_type_raw().unwrap_or(0) & 0x82 == 0x00
     }
 
     /// Reserved field at offset 0x2C (always 0 after compilation).
     #[inline]
-    pub fn null_2c(&self) -> u32 {
+    pub fn null_2c(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x2C)
     }
 }
@@ -259,32 +271,35 @@ impl<'a> ObjectInfo<'a> {
                 context: "ObjectInfo",
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "ObjectInfo",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Reference count at offset 0x00 (always 1 after compilation).
     #[inline]
-    pub fn ref_count(&self) -> u16 {
+    pub fn ref_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
     /// Object index at offset 0x02.
     #[inline]
-    pub fn object_index(&self) -> u16 {
+    pub fn object_index(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x02)
     }
 
     /// Back-pointer to the [`ObjectTable`](super::objecttable::ObjectTable) at offset 0x04.
     #[inline]
-    pub fn object_table_va(&self) -> u32 {
+    pub fn object_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
     /// IDE data pointer at offset 0x08 (always 0 in compiled binaries).
     #[inline]
-    pub fn ide_data(&self) -> u32 {
+    pub fn ide_data(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
@@ -292,13 +307,13 @@ impl<'a> ObjectInfo<'a> {
     ///
     /// `0xFFFFFFFF` for standard modules (which have no private descriptor).
     #[inline]
-    pub fn private_object_va(&self) -> u32 {
+    pub fn private_object_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
     /// Back-pointer to the [`PublicObjectDescriptor`] at offset 0x18.
     #[inline]
-    pub fn public_object_va(&self) -> u32 {
+    pub fn public_object_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x18)
     }
 
@@ -306,19 +321,19 @@ impl<'a> ObjectInfo<'a> {
     ///
     /// Points to the module's runtime data area in the `.data` section.
     #[inline]
-    pub fn object_data_va(&self) -> u32 {
+    pub fn object_data_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x1C)
     }
 
     /// Number of methods at offset 0x20.
     #[inline]
-    pub fn method_count(&self) -> u16 {
+    pub fn method_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x20)
     }
 
     /// IDE-only method count at offset 0x22 (zeroed in compiled binaries).
     #[inline]
-    pub fn method_count_ide(&self) -> u16 {
+    pub fn method_count_ide(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x22)
     }
 
@@ -333,19 +348,19 @@ impl<'a> ObjectInfo<'a> {
     /// This field is used during project loading to build dispatch tables.
     /// When `method_count() == 0`, this value may be uninitialized garbage.
     #[inline]
-    pub fn methods_va(&self) -> u32 {
+    pub fn methods_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 
     /// Constants count at offset 0x28.
     #[inline]
-    pub fn constants_count(&self) -> u16 {
+    pub fn constants_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x28)
     }
 
     /// Constants pool max size at offset 0x2A.
     #[inline]
-    pub fn max_constants(&self) -> u16 {
+    pub fn max_constants(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x2A)
     }
 
@@ -360,7 +375,7 @@ impl<'a> ObjectInfo<'a> {
     /// [`ProcDscInfo::object_info_va`](super::procedure::ProcDscInfo::object_info_va)
     /// → this struct → +0x34.
     #[inline]
-    pub fn constants_va(&self) -> u32 {
+    pub fn constants_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x34)
     }
 }
@@ -435,9 +450,12 @@ impl<'a> OptionalObjectInfo<'a> {
                 context: "OptionalObjectInfo",
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "OptionalObjectInfo",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// GUI GUID table entry count at offset 0x00.
@@ -446,19 +464,19 @@ impl<'a> OptionalObjectInfo<'a> {
     /// Each entry is a VA pointing to a 16-byte GUID that corresponds to
     /// a [`GuiTableEntry`](super::guitable::GuiTableEntry). Typically 1.
     #[inline]
-    pub fn gui_guids_count(&self) -> u32 {
+    pub fn gui_guids_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
     /// VA of the object's 16-byte CLSID at offset 0x04.
     #[inline]
-    pub fn object_clsid_va(&self) -> u32 {
+    pub fn object_clsid_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
     /// Reserved field at offset 0x08 (always 0).
     #[inline]
-    pub fn null_08(&self) -> u32 {
+    pub fn null_08(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
@@ -468,7 +486,7 @@ impl<'a> OptionalObjectInfo<'a> {
     /// pointing to a 16-byte GUID. These GUIDs match the GUIDs in
     /// [`GuiTable`](super::guitable) entries for this object.
     #[inline]
-    pub fn gui_guid_table_va(&self) -> u32 {
+    pub fn gui_guid_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
@@ -477,7 +495,7 @@ impl<'a> OptionalObjectInfo<'a> {
     /// Number of VA pointers in the table at [`default_iid_table_va`](Self::default_iid_table_va).
     /// Typically 1 (one default dispatch IID per object).
     #[inline]
-    pub fn default_iid_count(&self) -> u32 {
+    pub fn default_iid_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x10)
     }
 
@@ -486,7 +504,7 @@ impl<'a> OptionalObjectInfo<'a> {
     /// When [`events_iid_count`](Self::events_iid_count) is 0 (no custom
     /// events), this may share the same address as [`controls_va`](Self::controls_va).
     #[inline]
-    pub fn events_iid_table_va(&self) -> u32 {
+    pub fn events_iid_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x14)
     }
 
@@ -495,7 +513,7 @@ impl<'a> OptionalObjectInfo<'a> {
     /// Number of event source interfaces. Zero in all tested samples
     /// (forms/classes without custom event sources).
     #[inline]
-    pub fn events_iid_count(&self) -> u32 {
+    pub fn events_iid_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x18)
     }
 
@@ -505,13 +523,13 @@ impl<'a> OptionalObjectInfo<'a> {
     /// each pointing to a 16-byte IID. This is the default dispatch
     /// interface IID for COM QueryInterface resolution.
     #[inline]
-    pub fn default_iid_table_va(&self) -> u32 {
+    pub fn default_iid_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x1C)
     }
 
     /// Number of controls in the control array at offset 0x20.
     #[inline]
-    pub fn control_count(&self) -> u32 {
+    pub fn control_count(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x20)
     }
 
@@ -520,13 +538,13 @@ impl<'a> OptionalObjectInfo<'a> {
     /// Use [`ControlIterator`](super::control::ControlIterator) to iterate
     /// [`control_count`](Self::control_count) entries.
     #[inline]
-    pub fn controls_va(&self) -> u32 {
+    pub fn controls_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x24)
     }
 
     /// Method link count at offset 0x28.
     #[inline]
-    pub fn method_link_count(&self) -> u16 {
+    pub fn method_link_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x28)
     }
 
@@ -536,7 +554,7 @@ impl<'a> OptionalObjectInfo<'a> {
     /// to native thunks or event stubs). The value 439 (0x1B7) is a
     /// sentinel indicating native compilation — not an actual method count.
     #[inline]
-    pub fn pcode_count(&self) -> u16 {
+    pub fn pcode_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x2A)
     }
 
@@ -550,7 +568,7 @@ impl<'a> OptionalObjectInfo<'a> {
     ///
     /// Related: `ProcDscInfo.base_iface_slot_count = (initialize_event_offset / 4) - 1`.
     #[inline]
-    pub fn initialize_event_offset(&self) -> u16 {
+    pub fn initialize_event_offset(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x2C)
     }
 
@@ -558,13 +576,13 @@ impl<'a> OptionalObjectInfo<'a> {
     ///
     /// Always `initialize_event_offset + 4` (next slot after Initialize).
     #[inline]
-    pub fn terminate_event_offset(&self) -> u16 {
+    pub fn terminate_event_offset(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x2E)
     }
 
     /// VA of the method link table at offset 0x30.
     #[inline]
-    pub fn method_link_table_va(&self) -> u32 {
+    pub fn method_link_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x30)
     }
 
@@ -583,13 +601,13 @@ impl<'a> OptionalObjectInfo<'a> {
     /// The runtime resolves this via an array at `ExecProj+0x22C`
     /// indexed by `ObjectInfo.wObjectIndex`.
     #[inline]
-    pub fn basic_class_object_va(&self) -> u32 {
+    pub fn basic_class_object_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x34)
     }
 
     /// Reserved field at offset 0x38 (always 0).
     #[inline]
-    pub fn null_38(&self) -> u32 {
+    pub fn null_38(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x38)
     }
 
@@ -599,13 +617,13 @@ impl<'a> OptionalObjectInfo<'a> {
     /// PE image range — appears to be an unpatched linker-internal VA from
     /// the VBA6.DLL compilation environment. Not read by the runtime.
     #[inline]
-    pub fn field_3c(&self) -> u32 {
+    pub fn field_3c(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x3C)
     }
 
     /// Resolves the object's CLSID from [`object_clsid_va`](Self::object_clsid_va).
     pub fn resolve_clsid(&self, map: &AddressMap<'_>) -> Option<Guid> {
-        let va = self.object_clsid_va();
+        let va = self.object_clsid_va().ok()?;
         if va == 0 {
             return None;
         }
@@ -620,7 +638,11 @@ impl<'a> OptionalObjectInfo<'a> {
     /// the [`GuiTableEntry`](super::guitable::GuiTableEntry) entries for
     /// this object.
     pub fn gui_guids<'b>(&self, map: &'b AddressMap<'_>) -> GuidTableIter<'b> {
-        GuidTableIter::new(map, self.gui_guid_table_va(), self.gui_guids_count())
+        GuidTableIter::new(
+            map,
+            self.gui_guid_table_va().unwrap_or(0),
+            self.gui_guids_count().unwrap_or(0),
+        )
     }
 
     /// Returns an iterator over default dispatch interface IIDs.
@@ -629,7 +651,11 @@ impl<'a> OptionalObjectInfo<'a> {
     /// are the default COM dispatch interface GUIDs used for
     /// `QueryInterface` resolution.
     pub fn default_iids<'b>(&self, map: &'b AddressMap<'_>) -> GuidTableIter<'b> {
-        GuidTableIter::new(map, self.default_iid_table_va(), self.default_iid_count())
+        GuidTableIter::new(
+            map,
+            self.default_iid_table_va().unwrap_or(0),
+            self.default_iid_count().unwrap_or(0),
+        )
     }
 
     /// Returns an iterator over event source interface IIDs.
@@ -637,7 +663,11 @@ impl<'a> OptionalObjectInfo<'a> {
     /// Yields [`events_iid_count`](Self::events_iid_count) IIDs. Empty
     /// for objects without custom event sources.
     pub fn events_iids<'b>(&self, map: &'b AddressMap<'_>) -> GuidTableIter<'b> {
-        GuidTableIter::new(map, self.events_iid_table_va(), self.events_iid_count())
+        GuidTableIter::new(
+            map,
+            self.events_iid_table_va().unwrap_or(0),
+            self.events_iid_count().unwrap_or(0),
+        )
     }
 }
 
@@ -663,7 +693,7 @@ impl<'a> GuidTableIter<'a> {
     /// Creates a new GUID table iterator.
     pub fn new(map: &'a AddressMap<'a>, table_va: u32, count: u32) -> Self {
         let ptr_data = if table_va != 0 && count > 0 {
-            let ptr_size = count as usize * 4;
+            let ptr_size = (count as usize).saturating_mul(4);
             map.slice_from_va(table_va, ptr_size).unwrap_or(&[])
         } else {
             &[]
@@ -685,14 +715,12 @@ impl<'a> Iterator for GuidTableIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while self.index < self.count {
             let i = self.index as usize;
-            self.index += 1;
+            self.index = self.index.saturating_add(1);
 
-            let offset = i * 4;
-            if offset + 4 > self.ptr_data.len() {
-                return None;
-            }
-
-            let guid_va = u32::from_le_bytes(self.ptr_data[offset..offset + 4].try_into().ok()?);
+            let offset = i.checked_mul(4)?;
+            let end = offset.checked_add(4)?;
+            let chunk = self.ptr_data.get(offset..end)?;
+            let guid_va = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).ok()?);
             if guid_va == 0 {
                 continue;
             }
@@ -723,7 +751,7 @@ mod tests {
         // fObjectType = 0x00118003 (class module, as seen in real binaries)
         data[0x28..0x2C].copy_from_slice(&0x00118003u32.to_le_bytes());
         let desc = PublicObjectDescriptor::parse(&data).unwrap();
-        assert_eq!(desc.method_count(), 10);
+        assert_eq!(desc.method_count().unwrap(), 10);
         assert!(desc.has_optional_info());
         assert!(desc.is_class());
         assert!(!desc.is_form());
@@ -771,8 +799,8 @@ mod tests {
         data[0x20..0x22].copy_from_slice(&5u16.to_le_bytes()); // method_count
         data[0x24..0x28].copy_from_slice(&0x00404000u32.to_le_bytes()); // methods_va
         let info = ObjectInfo::parse(&data).unwrap();
-        assert_eq!(info.method_count(), 5);
-        assert_eq!(info.methods_va(), 0x00404000);
+        assert_eq!(info.method_count().unwrap(), 5);
+        assert_eq!(info.methods_va().unwrap(), 0x00404000);
     }
 
     #[test]
@@ -790,8 +818,8 @@ mod tests {
         data[0x2A..0x2C].copy_from_slice(&3u16.to_le_bytes()); // pcode_count
         data[0x20..0x24].copy_from_slice(&7u32.to_le_bytes()); // control_count
         let opt = OptionalObjectInfo::parse(&data).unwrap();
-        assert_eq!(opt.pcode_count(), 3);
-        assert_eq!(opt.control_count(), 7);
+        assert_eq!(opt.pcode_count().unwrap(), 3);
+        assert_eq!(opt.control_count().unwrap(), 7);
     }
 
     #[test]

@@ -23,10 +23,11 @@
 //! | 0x0C | N×4 | Parameter descriptors: `[{u16 offset, u16 type}]` × wParamCount |
 //! | +hdr | var | Null-terminated name strings (VBA runtime function names) |
 
-use core::str;
+use std::str;
 
 use crate::{
     addressmap::AddressMap,
+    error::Error,
     util::{read_cstr, read_u16_le, read_u32_le},
 };
 
@@ -54,26 +55,26 @@ impl<'a> VarStubDesc<'a> {
 
     /// Header size at offset 0x00 (0x0C + param_count * 4).
     #[inline]
-    pub fn header_size(&self) -> u16 {
+    pub fn header_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
     /// Data section size at offset 0x02.
     #[inline]
-    pub fn data_size(&self) -> u16 {
+    pub fn data_size(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x02)
     }
 
     /// Number of indexed property parameters at offset 0x06.
     #[inline]
-    pub fn param_count(&self) -> u16 {
+    pub fn param_count(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x06)
     }
 
     /// Flags byte 1 at offset 0x0A.
     #[inline]
     pub fn flags1(&self) -> u8 {
-        self.bytes[0x0A]
+        self.bytes.get(0x0A).copied().unwrap_or(0)
     }
 
     /// Flags byte 2 at offset 0x0B.
@@ -90,24 +91,27 @@ impl<'a> VarStubDesc<'a> {
     /// Bit 5 (0x20) = has COM interface data.
     #[inline]
     pub fn flags2(&self) -> u8 {
-        self.bytes[0x0B]
+        self.bytes.get(0x0B).copied().unwrap_or(0)
     }
 
     /// Total size of this entry (header + data).
     #[inline]
     pub fn total_size(&self) -> usize {
-        self.header_size() as usize + self.data_size() as usize
+        let hdr = self.header_size().unwrap_or(0) as usize;
+        let data = self.data_size().unwrap_or(0) as usize;
+        hdr.saturating_add(data)
     }
 
     /// Returns `true` if the data section contains VA pointers instead of
     /// inline strings. Detected by checking if the first data byte is
     /// non-printable ASCII (binary data / VA pointer).
     pub fn has_va_data(&self) -> bool {
-        let hdr = self.header_size() as usize;
-        if hdr >= self.bytes.len() {
+        let Ok(hdr) = self.header_size() else {
             return false;
-        }
-        let first = self.bytes[hdr];
+        };
+        let Some(&first) = self.bytes.get(hdr as usize) else {
+            return false;
+        };
         first != 0 && !(0x20..=0x7E).contains(&first)
     }
 
@@ -120,23 +124,34 @@ impl<'a> VarStubDesc<'a> {
         if !self.has_va_data() {
             return Vec::new();
         }
-        let hdr = self.header_size() as usize;
-        let data = &self.bytes[hdr..];
+        let Ok(hdr) = self.header_size() else {
+            return Vec::new();
+        };
+        let Some(data) = self.bytes.get(hdr as usize..) else {
+            return Vec::new();
+        };
         let mut result = Vec::new();
-        let mut pos = 0;
-        while pos + 4 <= data.len() {
-            let va = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-            pos += 4;
+        let mut pos: usize = 0;
+        while pos.saturating_add(4) <= data.len() {
+            let chunk = match data.get(pos..pos.saturating_add(4)) {
+                Some(c) => c,
+                None => break,
+            };
+            let arr: [u8; 4] = match chunk.try_into() {
+                Ok(a) => a,
+                Err(_) => break,
+            };
+            let va = u32::from_le_bytes(arr);
+            pos = pos.saturating_add(4);
             if va == 0 {
                 continue;
             }
-            if let Ok(off) = map.va_to_offset(va) {
-                let name = read_cstr(map.file(), off);
-                if let Ok(s) = str::from_utf8(name)
-                    && !s.is_empty()
-                {
-                    result.push(s);
-                }
+            if let Ok(off) = map.va_to_offset(va)
+                && let Ok(name) = read_cstr(map.file(), off)
+                && let Ok(s) = str::from_utf8(name)
+                && !s.is_empty()
+            {
+                result.push(s);
             }
         }
         result
@@ -148,11 +163,12 @@ impl<'a> VarStubDesc<'a> {
     /// or a method name (e.g., `Pack`). Returns empty if the data section
     /// starts with binary data (VA pointers) rather than a string.
     pub fn name(&self) -> &'a str {
-        let hdr = self.header_size() as usize;
-        if hdr >= self.bytes.len() {
+        let Ok(hdr) = self.header_size() else {
             return "";
-        }
-        let data = &self.bytes[hdr..];
+        };
+        let Some(data) = self.bytes.get(hdr as usize..) else {
+            return "";
+        };
         // Skip up to 4 leading null bytes (alignment padding)
         let start = data
             .iter()
@@ -160,40 +176,50 @@ impl<'a> VarStubDesc<'a> {
             .position(|&b| b != 0)
             .unwrap_or(4)
             .min(data.len());
-        if start >= data.len() {
+        let Some(data) = data.get(start..) else {
             return "";
-        }
-        let data = &data[start..];
+        };
         // Validate first byte is printable ASCII (not a VA/binary data)
-        if data[0] < 0x20 || data[0] > 0x7E {
+        let Some(&first) = data.first() else {
+            return "";
+        };
+        if !(0x20..=0x7E).contains(&first) {
             return "";
         }
         let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
-        str::from_utf8(&data[..end]).unwrap_or("")
+        match data.get(..end) {
+            Some(s) => str::from_utf8(s).unwrap_or(""),
+            None => "",
+        }
     }
 
     /// Returns all name strings from the data section.
     pub fn names(&self) -> Vec<&'a str> {
-        let hdr = self.header_size() as usize;
-        if hdr >= self.bytes.len() {
+        let Ok(hdr) = self.header_size() else {
             return Vec::new();
-        }
-        let data = &self.bytes[hdr..];
+        };
+        let Some(data) = self.bytes.get(hdr as usize..) else {
+            return Vec::new();
+        };
         let mut result = Vec::new();
-        let mut pos = 0;
+        let mut pos: usize = 0;
         while pos < data.len() {
             // Skip nulls
-            while pos < data.len() && data[pos] == 0 {
-                pos += 1;
+            while data.get(pos).copied() == Some(0) {
+                pos = pos.saturating_add(1);
             }
             if pos >= data.len() {
                 break;
             }
             let start = pos;
-            while pos < data.len() && data[pos] != 0 {
-                pos += 1;
+            while let Some(&b) = data.get(pos) {
+                if b == 0 {
+                    break;
+                }
+                pos = pos.saturating_add(1);
             }
-            if let Ok(s) = str::from_utf8(&data[start..pos])
+            if let Some(slice) = data.get(start..pos)
+                && let Ok(s) = str::from_utf8(slice)
                 && !s.is_empty()
             {
                 result.push(s);
@@ -231,11 +257,12 @@ impl<'a> Iterator for VarStubIter<'a> {
         if self.index >= self.count {
             return None;
         }
-        let ptr_va = self.ptr_array_va.wrapping_add(self.index as u32 * 4);
-        self.index += 1;
+        let offset = (self.index as u32).wrapping_mul(4);
+        let ptr_va = self.ptr_array_va.wrapping_add(offset);
+        self.index = self.index.saturating_add(1);
 
         let ptr_data = self.map.slice_from_va(ptr_va, 4).ok()?;
-        let stub_va = read_u32_le(ptr_data, 0);
+        let stub_va = read_u32_le(ptr_data, 0).ok()?;
         if stub_va == 0 {
             return None;
         }
@@ -245,9 +272,9 @@ impl<'a> Iterator for VarStubIter<'a> {
             .map
             .slice_from_va(stub_va, VarStubDesc::MIN_SIZE)
             .ok()?;
-        let hdr_size = read_u16_le(header_data, 0x00) as usize;
-        let data_size = read_u16_le(header_data, 0x02) as usize;
-        let total = hdr_size + data_size;
+        let hdr_size = read_u16_le(header_data, 0x00).ok()? as usize;
+        let data_size = read_u16_le(header_data, 0x02).ok()? as usize;
+        let total = hdr_size.saturating_add(data_size);
 
         let full_data = self
             .map
@@ -278,18 +305,18 @@ mod tests {
     #[test]
     fn test_simple_stub() {
         let stub = VarStubDesc::parse(&STUB_DATEVAR).unwrap();
-        assert_eq!(stub.header_size(), 0x0C);
-        assert_eq!(stub.data_size(), 0x1C);
-        assert_eq!(stub.param_count(), 0);
+        assert_eq!(stub.header_size().unwrap(), 0x0C);
+        assert_eq!(stub.data_size().unwrap(), 0x1C);
+        assert_eq!(stub.param_count().unwrap(), 0);
         assert_eq!(stub.name(), "__vbaDateVar");
     }
 
     #[test]
     fn test_method_stub() {
         let stub = VarStubDesc::parse(&STUB_PACK).unwrap();
-        assert_eq!(stub.header_size(), 0x0C);
-        assert_eq!(stub.data_size(), 0x0C);
-        assert_eq!(stub.param_count(), 0);
+        assert_eq!(stub.header_size().unwrap(), 0x0C);
+        assert_eq!(stub.data_size().unwrap(), 0x0C);
+        assert_eq!(stub.param_count().unwrap(), 0);
         assert_eq!(stub.name(), "Pack");
     }
 

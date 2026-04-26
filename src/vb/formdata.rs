@@ -26,7 +26,7 @@
 //!
 //! See `data/vb6_form_format.md` for the complete format specification.
 
-use core::fmt;
+use std::{borrow::Cow, fmt};
 
 use crate::{
     error::Error,
@@ -316,51 +316,51 @@ impl<'a> FormDataHeader<'a> {
 
     /// Parses the form data header.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::MIN_SIZE {
-            return Err(Error::TooShort {
-                expected: Self::MIN_SIZE,
-                actual: data.len(),
-                context: "FormDataHeader",
-            });
-        }
-        let magic = read_u16_le(data, 0x00);
+        let bytes = data.get(..Self::MIN_SIZE).ok_or(Error::TooShort {
+            expected: Self::MIN_SIZE,
+            actual: data.len(),
+            context: "FormDataHeader",
+        })?;
+        let magic = read_u16_le(bytes, 0x00)?;
         if magic != FORM_DATA_MAGIC {
+            let got: [u8; 4] = bytes
+                .get(..4)
+                .and_then(|s| <[u8; 4]>::try_from(s).ok())
+                .unwrap_or([0; 4]);
             return Err(Error::BadMagic {
                 expected: "CCFF (form data)",
-                got: [data[0], data[1], data[2], data[3]],
+                got,
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::MIN_SIZE],
-        })
+        Ok(Self { bytes })
     }
 
     /// Magic marker at offset 0x00 (should be 0xCCFF).
     #[inline]
-    pub fn magic(&self) -> u16 {
+    pub fn magic(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x00)
     }
 
     /// Version field at offset 0x02 (should be 0x0031).
     #[inline]
-    pub fn version(&self) -> u16 {
+    pub fn version(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x02)
     }
 
     /// Site count or flags byte at offset 0x04.
     #[inline]
     pub fn site_flags(&self) -> u8 {
-        self.bytes[0x04]
+        self.bytes.get(0x04).copied().unwrap_or(0)
     }
 
     /// Form's own GUI GUID at offset 0x05 (16 bytes).
     pub fn form_guid(&self) -> Option<Guid> {
-        Guid::from_bytes(&self.bytes[0x05..0x15])
+        Guid::from_bytes(self.bytes.get(0x05..0x15)?)
     }
 
     /// Secondary GUID at offset 0x15 (16 bytes).
     pub fn secondary_guid(&self) -> Option<Guid> {
-        let data = &self.bytes[0x15..0x25];
+        let data = self.bytes.get(0x15..0x25)?;
         if data.iter().all(|&b| b == 0) {
             return None;
         }
@@ -369,18 +369,18 @@ impl<'a> FormDataHeader<'a> {
 
     /// Default control GUID at offset 0x25 (16 bytes).
     pub fn default_control_guid(&self) -> Option<Guid> {
-        Guid::from_bytes(&self.bytes[0x25..0x35])
+        Guid::from_bytes(self.bytes.get(0x25..0x35)?)
     }
 
     /// Form width in twips at offset 0x59.
     #[inline]
-    pub fn width(&self) -> u32 {
+    pub fn width(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x59)
     }
 
     /// Form height in twips at offset 0x5D.
     #[inline]
-    pub fn height(&self) -> u32 {
+    pub fn height(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x5D)
     }
 }
@@ -437,81 +437,75 @@ impl<'a> FormControlRecord<'a> {
             });
         }
 
-        let raw_size = read_u32_le(data, 0);
+        let raw_size = read_u32_le(data, 0)?;
         let has_array_index = raw_size & 0x80000000 != 0;
         let total_size = raw_size & 0x7FFFFFFF;
 
-        if total_size < 8 || total_size as usize > data.len() {
+        let record = data.get(..total_size as usize).ok_or(Error::TooShort {
+            expected: total_size as usize,
+            actual: data.len(),
+            context: "FormControlRecord size",
+        })?;
+        if total_size < 8 {
             return Err(Error::TooShort {
-                expected: total_size as usize,
-                actual: data.len(),
+                expected: 8,
+                actual: total_size as usize,
                 context: "FormControlRecord size",
             });
         }
-
-        let record = &data[..total_size as usize];
-        let mut pos = 4; // past size field
+        let mut pos: usize = 4; // past size field
 
         // cId
-        let cid = record[pos];
-        pos += 1;
+        let cid = *record.get(pos).ok_or(Error::TooShort {
+            expected: pos.saturating_add(1),
+            actual: record.len(),
+            context: "FormControlRecord cId",
+        })?;
+        pos = pos.saturating_add(1);
 
         // Optional array index (if bit 31 was set)
         let array_index = if has_array_index {
-            if pos + 2 > record.len() {
-                return Err(Error::TooShort {
-                    expected: pos + 2,
-                    actual: record.len(),
-                    context: "FormControlRecord array_index",
-                });
-            }
-            let idx = read_u16_le(record, pos);
-            pos += 2;
+            let idx = read_u16_le(record, pos)?;
+            pos = pos.saturating_add(2);
             Some(idx)
         } else {
             None
         };
 
         // Name: [u16_le length] [string bytes + null]
-        if pos + 2 > record.len() {
-            return Err(Error::TooShort {
-                expected: pos + 2,
-                actual: record.len(),
-                context: "FormControlRecord name_len",
-            });
-        }
-        let name_len = read_u16_le(record, pos) as usize;
-        pos += 2;
+        let name_len = read_u16_le(record, pos)? as usize;
+        pos = pos.saturating_add(2);
 
-        if pos + name_len + 1 > record.len() {
-            return Err(Error::TooShort {
-                expected: pos + name_len + 1,
-                actual: record.len(),
-                context: "FormControlRecord name",
-            });
-        }
-        let name = &record[pos..pos + name_len];
-        pos += name_len + 1; // skip null terminator
+        let name_end = pos.checked_add(name_len).ok_or(Error::ArithmeticOverflow {
+            context: "FormControlRecord name end",
+        })?;
+        let name = record.get(pos..name_end).ok_or(Error::TooShort {
+            expected: name_end.saturating_add(1),
+            actual: record.len(),
+            context: "FormControlRecord name",
+        })?;
+        pos = name_end.checked_add(1).ok_or(Error::ArithmeticOverflow {
+            context: "FormControlRecord name terminator",
+        })?; // skip null terminator
 
         // cType byte
-        if pos >= record.len() {
-            return Err(Error::TooShort {
-                expected: pos + 1,
-                actual: record.len(),
-                context: "FormControlRecord cType",
-            });
-        }
-        let ctype = FormControlType::from_u8(record[pos]);
-        pos += 1;
+        let ctype_byte = *record.get(pos).ok_or(Error::TooShort {
+            expected: pos.saturating_add(1),
+            actual: record.len(),
+            context: "FormControlRecord cType",
+        })?;
+        let ctype = FormControlType::from_u8(ctype_byte);
+        pos = pos.saturating_add(1);
 
         // Property stream: everything from here to the 0xFF terminator
         // The 0xFF should be the last byte of the record
-        let props_end = if let Some(ff_pos) = record[pos..].iter().rposition(|&b| b == 0xFF) {
-            pos + ff_pos
+        let tail = record.get(pos..).unwrap_or(&[]);
+        let props_end = if let Some(ff_pos) = tail.iter().rposition(|&b| b == 0xFF) {
+            pos.saturating_add(ff_pos)
         } else {
             record.len()
         };
-        let properties = &record[pos..props_end];
+        let properties = record.get(pos..props_end).unwrap_or(&[]);
 
         let properties_offset_local = pos as u32; // offset within this record
 
@@ -540,9 +534,18 @@ impl<'a> FormControlRecord<'a> {
         self.array_index
     }
 
-    /// Control name (e.g., `b"Timer1"`, `b"Command1"`).
+    /// Control name as a lossy UTF-8 string (e.g., `"Timer1"`, `"Command1"`).
+    ///
+    /// Borrows when the underlying bytes are already valid UTF-8.
+    /// Use [`name_bytes`](Self::name_bytes) for the raw bytes.
     #[inline]
-    pub fn name(&self) -> &'a [u8] {
+    pub fn name(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.name)
+    }
+
+    /// Control name as raw bytes from the form binary.
+    #[inline]
+    pub fn name_bytes(&self) -> &'a [u8] {
         self.name
     }
 
@@ -678,28 +681,36 @@ impl<'a> FormDataParser<'a> {
         // 0xFF followed by a hierarchy marker (0x01-0x05). The 0xFF is the
         // property stream terminator.
         let mut pos = start;
-        while pos + 1 < data.len() {
-            if data[pos] == 0xFF && FormMarker::from_byte(data[pos + 1]).is_some() {
+        while pos.saturating_add(1) < data.len() {
+            let cur = match data.get(pos).copied() {
+                Some(b) => b,
+                None => break,
+            };
+            let next = match data.get(pos.saturating_add(1)).copied() {
+                Some(b) => b,
+                None => break,
+            };
+            if cur == 0xFF && FormMarker::from_byte(next).is_some() {
                 // Validate: for child markers (0x01, 0x03, 0x05), check
                 // that what follows looks like a valid record size
-                match data[pos + 1] {
-                    0x01 | 0x03 | 0x05 => {
-                        if pos + 6 < data.len() {
-                            let size = read_u32_le(data, pos + 2) & 0x7FFFFFFF;
-                            if (8..5000).contains(&size) {
-                                return &data[start..pos];
-                            }
+                match next {
+                    0x01 | 0x03 | 0x05 if pos.saturating_add(6) < data.len() => {
+                        let size = read_u32_le(data, pos.saturating_add(2))
+                            .map(|v| v & 0x7FFFFFFF)
+                            .unwrap_or(0);
+                        if (8..5000).contains(&size) {
+                            return data.get(start..pos).unwrap_or(&[]);
                         }
                     }
-                    0x04 => return &data[start..pos], // form end
-                    0x02 => return &data[start..pos], // end children
+                    0x04 | 0x02 => return data.get(start..pos).unwrap_or(&[]),
                     _ => {}
                 }
             }
-            pos += 1;
+            pos = pos.saturating_add(1);
         }
         // No marker found — return everything after header
-        &data[start..data.len().min(start + 256)]
+        let end = data.len().min(start.saturating_add(256));
+        data.get(start..end).unwrap_or(&[])
     }
 
     /// Walks the form data after the header, finding child control records.
@@ -711,68 +722,93 @@ impl<'a> FormDataParser<'a> {
         // the record structure (reasonable size field).
         let mut pos = FormDataHeader::MIN_SIZE;
         let start = loop {
-            if pos + 6 >= data.len() {
+            if pos.saturating_add(6) >= data.len() {
                 return Ok(controls); // no children found
             }
-            if data[pos] == 0xFF && data[pos + 1] == 0x01 {
+            let cur = data.get(pos).copied().unwrap_or(0);
+            let next = data.get(pos.saturating_add(1)).copied().unwrap_or(0);
+            if cur == 0xFF && next == 0x01 {
                 // Validate: a NEW marker should be followed by a record
                 // with a reasonable size (8..5000 bytes)
-                let size = read_u32_le(data, pos + 2) & 0x7FFFFFFF;
-                if (8..5000).contains(&size) && pos + 2 + size as usize <= data.len() {
-                    break pos + 1; // skip the 0xFF, start at marker
+                let size = read_u32_le(data, pos.saturating_add(2))
+                    .map(|v| v & 0x7FFFFFFF)
+                    .unwrap_or(0);
+                let end_check = (size as usize).saturating_add(pos.saturating_add(2));
+                if (8..5000).contains(&size) && end_check <= data.len() {
+                    break pos.saturating_add(1); // skip the 0xFF, start at marker
                 }
             }
-            if data[pos] == 0xFF && data[pos + 1] == 0x04 {
+            if cur == 0xFF && next == 0x04 {
                 return Ok(controls); // form end, no children
             }
-            pos += 1;
+            pos = pos.saturating_add(1);
         };
 
         // Now walk the marker sequence, tracking nesting depth
         pos = start;
         let mut depth: u16 = 0;
         while pos < data.len() {
-            let marker = match FormMarker::from_byte(data[pos]) {
+            let cur_byte = match data.get(pos).copied() {
+                Some(b) => b,
+                None => break,
+            };
+            let marker = match FormMarker::from_byte(cur_byte) {
                 Some(m) => m,
                 None => break,
             };
-            pos += 1; // skip marker byte
+            pos = pos.saturating_add(1); // skip marker byte
 
             match marker {
                 FormMarker::FormEnd => break,
                 FormMarker::NewChild => {
-                    if pos + 4 > data.len() {
+                    if pos.saturating_add(4) > data.len() {
                         break;
                     }
-                    let size = read_u32_le(data, pos) & 0x7FFFFFFF;
-                    if size < 8 || pos + size as usize > data.len() {
+                    let size = read_u32_le(data, pos).map(|v| v & 0x7FFFFFFF).unwrap_or(0);
+                    let size_usize = size as usize;
+                    let end = match pos.checked_add(size_usize) {
+                        Some(e) if e <= data.len() => e,
+                        _ => break,
+                    };
+                    if size < 8 {
                         break;
                     }
-                    if let Ok(mut record) = FormControlRecord::parse(&data[pos..]) {
+                    if let Some(slice) = data.get(pos..)
+                        && let Ok(mut record) = FormControlRecord::parse(slice)
+                    {
                         record.depth = depth;
                         record.offset_in_blob = pos as u32;
-                        record.properties_offset_in_blob += pos as u32;
+                        record.properties_offset_in_blob =
+                            record.properties_offset_in_blob.wrapping_add(pos as u32);
                         controls.push(record);
                     }
-                    pos += size as usize;
+                    pos = end;
                     // NEW marker opens a new nesting level for subsequent children
-                    depth += 1;
+                    depth = depth.saturating_add(1);
                 }
                 FormMarker::Sibling | FormMarker::MenuStart => {
-                    if pos + 4 > data.len() {
+                    if pos.saturating_add(4) > data.len() {
                         break;
                     }
-                    let size = read_u32_le(data, pos) & 0x7FFFFFFF;
-                    if size < 8 || pos + size as usize > data.len() {
+                    let size = read_u32_le(data, pos).map(|v| v & 0x7FFFFFFF).unwrap_or(0);
+                    let size_usize = size as usize;
+                    let end = match pos.checked_add(size_usize) {
+                        Some(e) if e <= data.len() => e,
+                        _ => break,
+                    };
+                    if size < 8 {
                         break;
                     }
-                    if let Ok(mut record) = FormControlRecord::parse(&data[pos..]) {
+                    if let Some(slice) = data.get(pos..)
+                        && let Ok(mut record) = FormControlRecord::parse(slice)
+                    {
                         record.depth = depth.saturating_sub(1);
                         record.offset_in_blob = pos as u32;
-                        record.properties_offset_in_blob += pos as u32;
+                        record.properties_offset_in_blob =
+                            record.properties_offset_in_blob.wrapping_add(pos as u32);
                         controls.push(record);
                     }
-                    pos += size as usize;
+                    pos = end;
                 }
                 FormMarker::EndChildren => {
                     depth = depth.saturating_sub(1);
@@ -851,7 +887,8 @@ mod tests {
         let ctrl = FormControlRecord::parse(&record).unwrap();
         assert_eq!(ctrl.cid(), 1);
         assert_eq!(ctrl.array_index(), None);
-        assert_eq!(ctrl.name(), b"Timer1");
+        assert_eq!(ctrl.name_bytes(), b"Timer1");
+        assert_eq!(ctrl.name(), "Timer1");
         assert_eq!(ctrl.control_type(), FormControlType::Timer);
         assert_eq!(ctrl.total_size(), 33);
         assert_eq!(ctrl.raw_properties().len(), 17); // 33 - 15 (header) - 1 (0xFF)
@@ -874,7 +911,8 @@ mod tests {
         let ctrl = FormControlRecord::parse(&record).unwrap();
         assert_eq!(ctrl.cid(), 5);
         assert_eq!(ctrl.array_index(), Some(3));
-        assert_eq!(ctrl.name(), b"Btn");
+        assert_eq!(ctrl.name_bytes(), b"Btn");
+        assert_eq!(ctrl.name(), "Btn");
         assert_eq!(ctrl.control_type(), FormControlType::CommandButton);
     }
 }

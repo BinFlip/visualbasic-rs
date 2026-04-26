@@ -33,7 +33,7 @@
 //! | 0x04 | 4 | `lpGuidData` (16-byte CLSID + instance name string) |
 //! | 0x08 | 4 | `lpDispatchSlot` (.data section dispatch table entry) |
 
-use core::str;
+use std::str;
 
 use crate::{
     addressmap::AddressMap,
@@ -68,14 +68,17 @@ impl<'a> ProjectInfo2<'a> {
                 context: "ProjectInfo2",
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::HEADER_SIZE],
-        })
+        let bytes = data.get(..Self::HEADER_SIZE).ok_or(Error::TooShort {
+            expected: Self::HEADER_SIZE,
+            actual: data.len(),
+            context: "ProjectInfo2",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// ObjectTable back-pointer at offset 0x04.
     #[inline]
-    pub fn object_table_va(&self) -> u32 {
+    pub fn object_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
@@ -84,7 +87,7 @@ impl<'a> ProjectInfo2<'a> {
     /// Contains one DWORD per object (total_objects entries). Each entry
     /// is either a PrivateObjectDescriptor VA or 0xFFFFFFFF (for modules).
     #[inline]
-    pub fn object_descs_va(&self) -> u32 {
+    pub fn object_descs_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x10)
     }
 }
@@ -122,9 +125,12 @@ impl<'a> InterfaceMetadata<'a> {
                 context: "InterfaceMetadata",
             });
         }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "InterfaceMetadata",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// VA of the dispatch name table at offset 0x14.
@@ -132,14 +138,54 @@ impl<'a> InterfaceMetadata<'a> {
     /// Points to null-terminated name strings: a library/module name
     /// followed by method/property names for this interface.
     #[inline]
-    pub fn name_table_va(&self) -> u32 {
+    pub fn name_table_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x14)
     }
 
     /// VA of the typelib GUID at offset 0x00.
     #[inline]
-    pub fn typelib_guid_va(&self) -> u32 {
+    pub fn typelib_guid_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
+    }
+
+    /// VA of the typelib path string at offset 0x10.
+    ///
+    /// Points to a null-terminated ANSI path identifying the source typelib
+    /// for this interface — typically the path of the OCX/DLL whose typelib
+    /// declares the dispatch interface (e.g. `"C:\Windows\System32\Comctl32.ocx"`).
+    /// May be `0` for project-internal interfaces with no external typelib.
+    ///
+    /// Pair with [`typelib_guid_va`](Self::typelib_guid_va) to get the
+    /// typelib's CLSID — together they identify which DLL/OCX provides
+    /// the type information for this interface (a supply-chain signal
+    /// useful for malware triage).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
+    #[inline]
+    pub fn typelib_path_va(&self) -> Result<u32, Error> {
+        read_u32_le(self.bytes, 0x10)
+    }
+
+    /// Raw `.data` section VA at offset 0x18.
+    ///
+    /// **Purpose undocumented.** Per `pcode/TODO.md`'s prior reverse-engineering
+    /// notes, this field consistently points into the binary's `.data`
+    /// section but its runtime use was not traced. Tracked as a Medium
+    /// Priority TODO ("InterfaceMetadata VA resolution") with the field
+    /// label `lpDataSlot`.
+    ///
+    /// Surface the raw VA so consumers can experiment without the crate
+    /// claiming semantics it has not verified. Future revisions may add a
+    /// typed accessor once the field's role is confirmed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
+    #[inline]
+    pub fn data_slot_va(&self) -> Result<u32, Error> {
+        read_u32_le(self.bytes, 0x18)
     }
 
     /// Reads dispatch name strings from the first block in the name table.
@@ -149,7 +195,9 @@ impl<'a> InterfaceMetadata<'a> {
     /// [`all_dispatch_names`](Self::all_dispatch_names) to get names
     /// from all blocks.
     pub fn dispatch_names(&self, map: &AddressMap<'a>) -> Vec<&'a str> {
-        let va = self.name_table_va();
+        let Ok(va) = self.name_table_va() else {
+            return Vec::new();
+        };
         if va == 0 {
             return Vec::new();
         }
@@ -166,7 +214,9 @@ impl<'a> InterfaceMetadata<'a> {
     /// by method/property names for that class. Returns a vector of
     /// name blocks, where each block is a vector of strings.
     pub fn all_dispatch_names(&self, map: &AddressMap<'a>) -> Vec<Vec<&'a str>> {
-        let va = self.name_table_va();
+        let Ok(va) = self.name_table_va() else {
+            return Vec::new();
+        };
         if va == 0 {
             return Vec::new();
         }
@@ -197,8 +247,10 @@ impl ControlTypeEntry {
 
     /// Reads the control instance name string (after the 16-byte GUID).
     pub fn control_name<'a>(&self, map: &AddressMap<'a>) -> Option<&'a str> {
-        let data = map.slice_from_va(self.guid_data_va + 16, 64).ok()?;
-        let name = read_cstr(data, 0);
+        let data = map
+            .slice_from_va(self.guid_data_va.wrapping_add(16), 64)
+            .ok()?;
+        let name = read_cstr(data, 0).ok()?;
         if name.is_empty() {
             return None;
         }
@@ -233,7 +285,7 @@ impl<'a> ControlTypeIter<'a> {
     pub fn new(map: &'a AddressMap<'a>, pi2_va: u32) -> Self {
         Self {
             map,
-            base_va: pi2_va + ProjectInfo2::HEADER_SIZE as u32,
+            base_va: pi2_va.wrapping_add(ProjectInfo2::HEADER_SIZE as u32),
             index: 0,
         }
     }
@@ -243,22 +295,23 @@ impl<'a> Iterator for ControlTypeIter<'a> {
     type Item = ControlTypeEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let entry_va = self.base_va + self.index * ProjectInfo2::ENTRY_SIZE as u32;
+        let entry_offset = self.index.checked_mul(ProjectInfo2::ENTRY_SIZE as u32)?;
+        let entry_va = self.base_va.checked_add(entry_offset)?;
         let data = self
             .map
             .slice_from_va(entry_va, ProjectInfo2::ENTRY_SIZE)
             .ok()?;
 
-        let a = read_u32_le(data, 0);
-        let b = read_u32_le(data, 4);
+        let a = read_u32_le(data, 0).ok()?;
+        let b = read_u32_le(data, 4).ok()?;
 
         // Stop if first two DWORDs don't resolve as valid VAs in the PE
         if !self.map.is_va_in_image(a) || !self.map.is_va_in_image(b) {
             return None;
         }
 
-        let c = read_u32_le(data, 8);
-        self.index += 1;
+        let c = read_u32_le(data, 8).ok()?;
+        self.index = self.index.checked_add(1)?;
 
         Some(ControlTypeEntry {
             interface_metadata_va: a,
@@ -276,36 +329,41 @@ pub fn read_name_strings<'a>(
     pi2_va: u32,
     entry_count: u32,
 ) -> Vec<&'a str> {
-    let names_va =
-        pi2_va + ProjectInfo2::HEADER_SIZE as u32 + entry_count * ProjectInfo2::ENTRY_SIZE as u32;
+    let entries_size = entry_count.wrapping_mul(ProjectInfo2::ENTRY_SIZE as u32);
+    let names_va = pi2_va
+        .wrapping_add(ProjectInfo2::HEADER_SIZE as u32)
+        .wrapping_add(entries_size);
 
     let Ok(data) = map.slice_from_va(names_va, 1024) else {
         return Vec::new();
     };
 
     let mut names = Vec::new();
-    let mut pos = 0;
+    let mut pos = 0usize;
     while pos < data.len() {
+        let Some(&b) = data.get(pos) else { break };
         // Skip null padding
-        if data[pos] == 0 {
-            pos += 1;
+        if b == 0 {
+            pos = pos.saturating_add(1);
             continue;
         }
         // Stop if not printable ASCII
-        if data[pos] < 0x20 || data[pos] > 0x7E {
+        if !(0x20..=0x7E).contains(&b) {
             break;
         }
-        let name = read_cstr(data, pos);
+        let Ok(name) = read_cstr(data, pos) else {
+            break;
+        };
         if name.is_empty() {
             break;
         }
         if let Ok(s) = str::from_utf8(name) {
             names.push(s);
         }
-        pos += name.len() + 1;
+        pos = pos.saturating_add(name.len()).saturating_add(1);
         // Align to 4-byte boundary
         while pos % 4 != 0 && pos < data.len() {
-            pos += 1;
+            pos = pos.saturating_add(1);
         }
     }
     names
@@ -332,24 +390,28 @@ fn extract_name_block(data: &[u8], start: usize) -> (Vec<&str>, usize) {
     let mut pos = start;
 
     while pos < data.len() {
+        let Some(&b) = data.get(pos) else { break };
         // Skip null padding
-        if data[pos] == 0 {
-            let nulls = data[pos..].iter().take_while(|&&b| b == 0).count();
+        if b == 0 {
+            let tail = data.get(pos..).unwrap_or(&[]);
+            let nulls = tail.iter().take_while(|&&b| b == 0).count();
             if nulls >= 4 && !names.is_empty() {
                 // End of name block
-                return (names, pos + nulls);
+                return (names, pos.saturating_add(nulls));
             }
-            pos += nulls;
+            pos = pos.saturating_add(nulls);
             continue;
         }
-        let name = read_cstr(data, pos);
+        let Ok(name) = read_cstr(data, pos) else {
+            break;
+        };
         if !is_vb_identifier(name) {
             break;
         }
         if let Ok(s) = str::from_utf8(name) {
             names.push(s);
         }
-        pos += name.len() + 1;
+        pos = pos.saturating_add(name.len()).saturating_add(1);
     }
     (names, pos)
 }
@@ -363,23 +425,27 @@ fn extract_name_block(data: &[u8], start: usize) -> (Vec<&str>, usize) {
 /// block.
 fn extract_all_name_blocks(data: &[u8]) -> Vec<Vec<&str>> {
     let mut blocks = Vec::new();
-    let mut pos = 0;
+    let mut pos = 0usize;
 
     while pos < data.len() {
+        let Some(&b) = data.get(pos) else { break };
         // Skip non-identifier bytes (binary metadata between blocks)
-        if data[pos] == 0 {
-            pos += 1;
+        if b == 0 {
+            pos = pos.saturating_add(1);
             continue;
         }
-        if data[pos] < 0x20 || data[pos] > 0x7E {
-            pos += 1;
+        if !(0x20..=0x7E).contains(&b) {
+            pos = pos.saturating_add(1);
             continue;
         }
 
         // Try to extract a name block starting here
-        let name = read_cstr(data, pos);
+        let Ok(name) = read_cstr(data, pos) else {
+            pos = pos.saturating_add(1);
+            continue;
+        };
         if !is_vb_identifier(name) {
-            pos += 1;
+            pos = pos.saturating_add(1);
             continue;
         }
 
@@ -404,8 +470,8 @@ mod tests {
         data[0x08..0x0C].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes());
         data[0x10..0x14].copy_from_slice(&0x00405000u32.to_le_bytes());
         let pi2 = ProjectInfo2::parse(&data).unwrap();
-        assert_eq!(pi2.object_table_va(), 0x00402000);
-        assert_eq!(pi2.object_descs_va(), 0x00405000);
+        assert_eq!(pi2.object_table_va().unwrap(), 0x00402000);
+        assert_eq!(pi2.object_descs_va().unwrap(), 0x00405000);
     }
 
     #[test]

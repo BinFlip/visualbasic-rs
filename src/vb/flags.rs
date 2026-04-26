@@ -1,6 +1,6 @@
 //! Bitflag newtypes for VB6 structure flag fields.
 
-use core::fmt;
+use std::fmt;
 
 /// Object type flags from `PublicObjectDescriptor.fObjectType` (u32).
 ///

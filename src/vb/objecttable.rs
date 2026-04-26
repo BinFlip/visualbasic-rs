@@ -59,16 +59,12 @@ impl<'a> ObjectTable<'a> {
     ///
     /// Returns [`Error::TooShort`] if `data.len() < 0x54`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "ObjectTable",
-            });
-        }
-        Ok(Self {
-            bytes: &data[..Self::SIZE],
-        })
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "ObjectTable",
+        })?;
+        Ok(Self { bytes })
     }
 
     /// Returns the raw bytes of this structure.
@@ -78,8 +74,12 @@ impl<'a> ObjectTable<'a> {
     }
 
     /// Heap link at offset 0x00 (always 0 in compiled binaries).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn heap_link(&self) -> u32 {
+    pub fn heap_link(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x00)
     }
 
@@ -94,8 +94,12 @@ impl<'a> ObjectTable<'a> {
     /// VA (confirmed by `sub_6602BD7D` which matches `[node+0x10]` against
     /// VBHeader). Useful for memory forensics to cross-reference the
     /// structure chain from a process dump.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn exec_proj_va(&self) -> u32 {
+    pub fn exec_proj_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
     }
 
@@ -105,14 +109,22 @@ impl<'a> ObjectTable<'a> {
     /// structure containing COM dispatch interface metadata for the project's
     /// classes and forms. Use [`ProjectInfo2::parse`](super::projectinfo2::ProjectInfo2::parse)
     /// to decode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn project_info2_va(&self) -> u32 {
+    pub fn project_info2_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x08)
     }
 
     /// Reserved field at offset 0x0C (always `0xFFFFFFFF`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn reserved(&self) -> u32 {
+    pub fn reserved(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x0C)
     }
 
@@ -139,20 +151,32 @@ impl<'a> ObjectTable<'a> {
     ///
     /// `ProcCallEngine_Body` reads `[lpProjectObject+0x14]` then
     /// dereferences `[result+0x0C]` from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn project_object_va(&self) -> u32 {
+    pub fn project_object_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x14)
     }
 
     /// Object table GUID at offset 0x18 (16 bytes).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn uuid(&self) -> &'a [u8] {
+    pub fn uuid(&self) -> Result<&'a [u8], Error> {
         read_fixed(self.bytes, 0x18, 16)
     }
 
     /// Compilation state flag at offset 0x28 (always `0x000A` in compiled binaries).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn compile_state(&self) -> u16 {
+    pub fn compile_state(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x28)
     }
 
@@ -160,47 +184,75 @@ impl<'a> ObjectTable<'a> {
     ///
     /// This determines the length of the
     /// [`PublicObjectDescriptor`](super::object::PublicObjectDescriptor) array.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn total_objects(&self) -> u16 {
+    pub fn total_objects(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x2A)
     }
 
     /// Compiled objects count at offset 0x2C.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn compiled_objects(&self) -> u16 {
+    pub fn compiled_objects(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x2C)
     }
 
     /// Objects in use count at offset 0x2E.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn objects_in_use(&self) -> u16 {
+    pub fn objects_in_use(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x2E)
     }
 
     /// Virtual address of the [`PublicObjectDescriptor`](super::object::PublicObjectDescriptor)
     /// array at offset 0x30.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn object_array_va(&self) -> u32 {
+    pub fn object_array_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x30)
     }
 
     /// IDE-only flag at offset 0x34 (always 0 in compiled binaries).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn ide_flag(&self) -> u32 {
+    pub fn ide_flag(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x34)
     }
 
     /// Project name string VA at offset 0x40.
     ///
     /// Points to a null-terminated ANSI string with the VB project name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn project_name_va(&self) -> u32 {
+    pub fn project_name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x40)
     }
 
     /// Primary locale ID at offset 0x44 (e.g., `0x0409` for US English).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn lcid(&self) -> u32 {
+    pub fn lcid(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x44)
     }
 
@@ -208,14 +260,22 @@ impl<'a> ObjectTable<'a> {
     ///
     /// May differ from the primary LCID (e.g., `0x0416` for Portuguese
     /// when the primary is `0x0409` US English).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn lcid2(&self) -> u32 {
+    pub fn lcid2(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x48)
     }
 
     /// Format version identifier at offset 0x50 (always `2` in all tested samples).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Truncated`] if the backing buffer is shorter than expected.
     #[inline]
-    pub fn identifier(&self) -> u32 {
+    pub fn identifier(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x50)
     }
 }
@@ -241,10 +301,10 @@ mod tests {
     fn test_parse_valid() {
         let data = make_object_table();
         let ot = ObjectTable::parse(&data).unwrap();
-        assert_eq!(ot.reserved(), 0xFFFFFFFF);
-        assert_eq!(ot.total_objects(), 4);
-        assert_eq!(ot.object_array_va(), 0x00403000);
-        assert_eq!(ot.lcid(), 0x0409);
+        assert_eq!(ot.reserved().unwrap(), 0xFFFFFFFF);
+        assert_eq!(ot.total_objects().unwrap(), 4);
+        assert_eq!(ot.object_array_va().unwrap(), 0x00403000);
+        assert_eq!(ot.lcid().unwrap(), 0x0409);
     }
 
     #[test]
@@ -260,18 +320,18 @@ mod tests {
     fn test_all_fields() {
         let data = make_object_table();
         let ot = ObjectTable::parse(&data).unwrap();
-        let _ = ot.heap_link();
-        let _ = ot.exec_proj_va();
-        let _ = ot.project_info2_va();
-        let _ = ot.project_object_va();
-        let _ = ot.uuid();
-        let _ = ot.compile_state();
-        let _ = ot.compiled_objects();
-        let _ = ot.objects_in_use();
-        let _ = ot.ide_flag();
-        let _ = ot.project_name_va();
-        let _ = ot.lcid2();
-        let _ = ot.identifier();
+        let _ = ot.heap_link().unwrap();
+        let _ = ot.exec_proj_va().unwrap();
+        let _ = ot.project_info2_va().unwrap();
+        let _ = ot.project_object_va().unwrap();
+        let _ = ot.uuid().unwrap();
+        let _ = ot.compile_state().unwrap();
+        let _ = ot.compiled_objects().unwrap();
+        let _ = ot.objects_in_use().unwrap();
+        let _ = ot.ide_flag().unwrap();
+        let _ = ot.project_name_va().unwrap();
+        let _ = ot.lcid2().unwrap();
+        let _ = ot.identifier().unwrap();
         let _ = ot.as_bytes();
     }
 }

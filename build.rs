@@ -234,7 +234,11 @@ fn main() {
         "            let idx = next_byte.unwrap_or(0) as usize;"
     )
     .unwrap();
-    writeln!(out, "            (&LEAD0_TABLE[idx], 2)").unwrap();
+    writeln!(
+        out,
+        "            (LEAD0_TABLE.get(idx).unwrap_or(&UNKNOWN_OPCODE), 2)"
+    )
+    .unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out, "        0xFC => {{").unwrap();
     writeln!(
@@ -242,7 +246,11 @@ fn main() {
         "            let idx = next_byte.unwrap_or(0) as usize;"
     )
     .unwrap();
-    writeln!(out, "            (&LEAD1_TABLE[idx], 2)").unwrap();
+    writeln!(
+        out,
+        "            (LEAD1_TABLE.get(idx).unwrap_or(&UNKNOWN_OPCODE), 2)"
+    )
+    .unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out, "        0xFD => {{").unwrap();
     writeln!(
@@ -250,7 +258,11 @@ fn main() {
         "            let idx = next_byte.unwrap_or(0) as usize;"
     )
     .unwrap();
-    writeln!(out, "            (&LEAD2_TABLE[idx], 2)").unwrap();
+    writeln!(
+        out,
+        "            (LEAD2_TABLE.get(idx).unwrap_or(&UNKNOWN_OPCODE), 2)"
+    )
+    .unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out, "        0xFE => {{").unwrap();
     writeln!(
@@ -258,7 +270,11 @@ fn main() {
         "            let idx = next_byte.unwrap_or(0) as usize;"
     )
     .unwrap();
-    writeln!(out, "            (&LEAD3_TABLE[idx], 2)").unwrap();
+    writeln!(
+        out,
+        "            (LEAD3_TABLE.get(idx).unwrap_or(&UNKNOWN_OPCODE), 2)"
+    )
+    .unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out, "        0xFF => {{").unwrap();
     writeln!(
@@ -266,9 +282,17 @@ fn main() {
         "            let idx = next_byte.unwrap_or(0) as usize;"
     )
     .unwrap();
-    writeln!(out, "            (&LEAD4_TABLE[idx], 2)").unwrap();
+    writeln!(
+        out,
+        "            (LEAD4_TABLE.get(idx).unwrap_or(&UNKNOWN_OPCODE), 2)"
+    )
+    .unwrap();
     writeln!(out, "        }}").unwrap();
-    writeln!(out, "        b => (&PRIMARY_TABLE[b as usize], 1),").unwrap();
+    writeln!(
+        out,
+        "        b => (PRIMARY_TABLE.get(b as usize).unwrap_or(&UNKNOWN_OPCODE), 1),"
+    )
+    .unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out, "}}").unwrap();
 
@@ -761,7 +785,7 @@ fn generate_control_properties(out_dir: &str) {
     writeln!(out, "    }};").unwrap();
     writeln!(
         out,
-        "    table.binary_search_by_key(&opcode, |(op, _)| *op).ok().map(|i| &table[i].1)"
+        "    table.binary_search_by_key(&opcode, |(op, _)| *op).ok().and_then(|i| table.get(i)).map(|(_, v)| v)"
     )
     .unwrap();
     writeln!(out, "}}").unwrap();
@@ -1240,7 +1264,7 @@ fn generate_msvbvm60_exports(out_dir: &str) {
     .unwrap();
     writeln!(
         out,
-        "    EXPORTS.binary_search_by_key(&name, |e| e.name).ok().map(|i| &EXPORTS[i])"
+        "    EXPORTS.binary_search_by_key(&name, |e| e.name).ok().and_then(|i| EXPORTS.get(i))"
     )
     .unwrap();
     writeln!(out, "}}").unwrap();
@@ -1281,7 +1305,7 @@ fn generate_msvbvm60_exports(out_dir: &str) {
     .unwrap();
     writeln!(
         out,
-        "    ORDINAL_TABLE.binary_search_by_key(&ordinal, |(o, _)| *o).ok().map(|i| &EXPORTS[ORDINAL_TABLE[i].1])"
+        "    ORDINAL_TABLE.binary_search_by_key(&ordinal, |(o, _)| *o).ok().and_then(|i| ORDINAL_TABLE.get(i)).and_then(|(_, idx)| EXPORTS.get(*idx))"
     )
     .unwrap();
     writeln!(out, "}}").unwrap();
