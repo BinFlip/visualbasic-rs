@@ -1,28 +1,31 @@
 [package]
 name = "visualbasic"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Johann Kempter <admin@binflip.rs>"]
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Parse and inspect Visual Basic 6 compiled binaries"
 license = "Apache-2.0"
 repository = "https://github.com/BinFlip/visualbasic-rs"
 readme = "README.md"
 keywords = ["vb6", "pcode", "parser", "reverse-engineering", "binary-analysis"]
 categories = ["parser-implementations"]
-# Exclude internal planning/research notes from the published crate.
-# `data/*.csv` is needed by build.rs at compile time and stays bundled;
-# the prose files in `data/` are research notes that don't ship.
-exclude = [
-    "FEATURES.md",
-    "TODO.md",
-    "MSVBVM60_RUNTIME.md",
-    "data/VB6_PCODE_RESEARCH.md",
-    "data/vb6_form_format.md",
-    ".github/",
-    "*.bndb",
-    "*.bin.bndb",
-]
+
+# visualbasic is used in malware-analysis pipelines where every input
+# byte is adversarial. These lints prevent the parser from panicking on
+# malformed input. The `cfg_attr(test, allow(...))` escape hatch in
+# `src/lib.rs` lets tests still use `unwrap`/`expect`/`panic` for terseness.
+# This crate also denies `unsafe_code`.
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
+indexing_slicing = "deny"
 
 [features]
 default = []

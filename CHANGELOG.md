@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-04
+
+Patch release focused on parser integration ergonomics and stable
+persistence surfaces.
+
+### Added
+
+- `VbProject::va_to_rva()`, `VbProject::pcode_method_rva()`, and
+  `VbProject::code_entrypoint_rva()` so consumers can convert VB6 VAs
+  without threading `image_base` through caller code.
+- Stable `as_str()` discriminator helpers for `ExternalKind`,
+  `PropertyValue`, `FormControlType`, and the new `IidKind`.
+- `PropertyValue::picture_bytes()` and `PictureData::bytes()` for direct
+  access to embedded BMP/ICO payload bytes.
+- `PropertyValue::display_truncated(limit)` for char-boundary-safe display
+  truncation.
+- `ComRegData::MIN_BUFFER_SIZE` for callers that pre-slice COM registration
+  data before parsing.
+- `OptionalObjectInfo::typed_iids()` with `IidKind` and `TypedIidIter` to
+  iterate GUI, default, and event IIDs through one typed stream.
+- `FormControlRecord::parent_index()` exposing stable parent-control linkage
+  in the parsed form-control list.
+
+### Documentation
+
+- Documented `OptionalObjectInfo` and `PrivateObjectDescriptor` accessor
+  fallibility semantics.
+- Documented the `PCodeMethod::instructions()` upper bound from the on-disk
+  `u16` procedure-size field.
+
 ## [0.2.0] — 2026-04-26
 
 A breaking-change release focused on adversarial-input safety, richer
@@ -217,6 +247,7 @@ Affects `vbobject.rs`, `pcodemethod.rs`, `methodlink.rs`,
 
 Initial public release.
 
-[Unreleased]: https://github.com/BinFlip/visualbasic-rs/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/BinFlip/visualbasic-rs/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/BinFlip/visualbasic-rs/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/BinFlip/visualbasic-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/BinFlip/visualbasic-rs/releases/tag/v0.1.0

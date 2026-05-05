@@ -429,6 +429,10 @@ pub struct PictureData {
     pub is_bmp: bool,
     /// Whether this is the default picture sentinel (0xFFFFFFFF).
     pub is_default: bool,
+    /// Embedded picture bytes, excluding the 4-byte size prefix.
+    ///
+    /// Empty when [`is_default`](Self::is_default) is `true`.
+    pub bytes: Vec<u8>,
 }
 
 impl PictureData {
@@ -445,6 +449,7 @@ impl PictureData {
                     size: 0,
                     is_bmp: false,
                     is_default: true,
+                    bytes: Vec::new(),
                 },
                 4,
             ));
@@ -463,9 +468,21 @@ impl PictureData {
                 size,
                 is_bmp,
                 is_default: false,
+                bytes: data.get(4..consumed)?.to_vec(),
             },
             consumed,
         ))
+    }
+
+    /// Returns the embedded BMP/ICO bytes, excluding the size prefix.
+    ///
+    /// Returns `None` for the default-picture sentinel.
+    pub fn bytes(&self) -> Option<&[u8]> {
+        if self.is_default {
+            None
+        } else {
+            Some(&self.bytes)
+        }
     }
 }
 
@@ -649,6 +666,55 @@ pub enum PropertyValue {
     Picture(PictureData),
     /// StdDataFormat COM object (from MSSTDFMT.DLL).
     DataFormat(StdDataFormat),
+}
+
+impl PropertyValue {
+    /// Returns the stable persistence string for this value's discriminator.
+    ///
+    /// These strings are part of the public API contract and are suitable
+    /// for database storage: `"Flag"`, `"Byte"`, `"Int16"`, `"Long"`,
+    /// `"Color"`, `"Str"`, `"TagStr"`, `"Position"`, `"ClientRect"`,
+    /// `"Font"`, `"Picture"`, and `"DataFormat"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Flag => "Flag",
+            Self::Byte(_) => "Byte",
+            Self::Int16(_) => "Int16",
+            Self::Long(_) => "Long",
+            Self::Color(_) => "Color",
+            Self::Str(_) => "Str",
+            Self::TagStr(_) => "TagStr",
+            Self::Position(_) => "Position",
+            Self::ClientRect(_) => "ClientRect",
+            Self::Font(_) => "Font",
+            Self::Picture(_) => "Picture",
+            Self::DataFormat(_) => "DataFormat",
+        }
+    }
+
+    /// Returns the embedded BMP/ICO bytes for [`PropertyValue::Picture`].
+    ///
+    /// Returns `None` for non-picture values and for the default-picture
+    /// sentinel.
+    pub fn picture_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Picture(pic) => pic.bytes(),
+            _ => None,
+        }
+    }
+
+    /// Formats this value with [`Display`](fmt::Display), truncated to a
+    /// maximum number of Unicode scalar values.
+    ///
+    /// Truncation happens only at character boundaries. No suffix is added,
+    /// so the returned string length is at most `limit` characters.
+    pub fn display_truncated(&self, limit: usize) -> String {
+        let rendered = self.to_string();
+        if rendered.chars().count() <= limit {
+            return rendered;
+        }
+        rendered.chars().take(limit).collect()
+    }
 }
 
 impl fmt::Display for PropertyValue {

@@ -362,7 +362,7 @@ pub fn read_name_strings<'a>(
         }
         pos = pos.saturating_add(name.len()).saturating_add(1);
         // Align to 4-byte boundary
-        while pos % 4 != 0 && pos < data.len() {
+        while !pos.is_multiple_of(4) && pos < data.len() {
             pos = pos.saturating_add(1);
         }
     }

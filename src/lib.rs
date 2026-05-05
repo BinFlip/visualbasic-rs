@@ -109,17 +109,13 @@
 //! than `[]`. **No input byte sequence can panic this parser.** Tests are
 //! exempt from these lints.
 
-// This crate is used for malware analysis: every input byte is
-// adversarial and must not be allowed to panic the parser.
-#![deny(
-    missing_docs,
-    unsafe_code,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing
-)]
+// The `missing_docs`, `unsafe_code`, `clippy::unwrap_used`,
+// `clippy::expect_used`, `clippy::panic`,
+// `clippy::arithmetic_side_effects`, and `clippy::indexing_slicing` lints
+// are declared in `Cargo.toml` under `[lints]` so they enforce on every
+// build regardless of the consuming workspace. visualbasic is used in
+// malware-analysis pipelines where every input byte is adversarial and the
+// parser must not panic.
 #![cfg_attr(
     test,
     allow(

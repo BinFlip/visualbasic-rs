@@ -610,15 +610,24 @@ impl ExternalKind {
             other => Self::Unknown(other),
         }
     }
+
+    /// Returns the stable persistence string for this external kind.
+    ///
+    /// These strings are part of the public API contract and are suitable
+    /// for database storage: `"DeclareFunction"`, `"TypeLib"`, and
+    /// `"Unknown"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DeclareFunction => "DeclareFunction",
+            Self::TypeLib => "TypeLib",
+            Self::Unknown(_) => "Unknown",
+        }
+    }
 }
 
 impl fmt::Display for ExternalKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TypeLib => write!(f, "typelib"),
-            Self::DeclareFunction => write!(f, "declare"),
-            Self::Unknown(v) => write!(f, "unknown(0x{v:08X})"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

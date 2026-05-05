@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn test_lead_bytes_size_is_1() {
         for (i, entry) in PRIMARY_TABLE.iter().enumerate().skip(0xFB) {
-            assert_eq!(entry.size, 1, "Lead byte 0x{:02X} should have size 1", i);
+            assert_eq!(entry.size, 1, "Lead byte 0x{i:02X} should have size 1");
         }
     }
 
@@ -324,8 +324,8 @@ mod tests {
         // Allow some variance due to how we count vs the research.
         // modPCode.bas defines ~1165 named opcodes; the ~822 from research refers to
         // unique handler addresses in the DLL (many opcodes share implementations).
-        assert!(count > 1000, "Expected >1000 named opcodes, got {}", count);
-        assert!(count < 1300, "Expected <1300 named opcodes, got {}", count);
+        assert!(count > 1000, "Expected >1000 named opcodes, got {count}");
+        assert!(count < 1300, "Expected <1300 named opcodes, got {count}");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::{
     addressmap::AddressMap,
     entrypoint,
     error::Error,
-    project::{CodeEntryKind, VbObject},
+    project::{CodeEntryKind, PCodeMethod, VbObject},
     util::read_cstr,
     vb::{
         external::{ExternalComponentIter, ExternalTableEntry},
@@ -363,6 +363,36 @@ impl<'a> VbProject<'a> {
     #[inline]
     pub fn address_map(&self) -> &AddressMap<'a> {
         &self.map
+    }
+
+    /// Converts a VA in this PE image to an RVA.
+    ///
+    /// Returns `None` when the VA is below the image base. The returned
+    /// value is a stable `u64` for consumers that store RVAs in database
+    /// columns shared with 64-bit parsers.
+    #[inline]
+    pub fn va_to_rva(&self, va: u32) -> Option<u64> {
+        va.checked_sub(self.map.image_base()).map(u64::from)
+    }
+
+    /// Returns the RVA of a P-Code method's callable entry stub.
+    ///
+    /// This converts [`PCodeMethod::stub_va`] using the PE image base held
+    /// by this project, so callers do not need to thread `image_base`
+    /// through their VB6 parser path.
+    #[inline]
+    pub fn pcode_method_rva(&self, method: &PCodeMethod<'_>) -> Option<u64> {
+        self.va_to_rva(method.stub_va())
+    }
+
+    /// Returns the RVA of a discovered code entry point.
+    ///
+    /// This converts [`CodeEntrypoint::va`] using the PE image base held by
+    /// this project, so callers can pass the result directly to tools that
+    /// consume RVAs.
+    #[inline]
+    pub fn code_entrypoint_rva(&self, entrypoint: &CodeEntrypoint<'_>) -> Option<u64> {
+        self.va_to_rva(entrypoint.va)
     }
 
     /// Returns `true` if the binary is P-Code compiled.

@@ -3,6 +3,8 @@
 //! These structures describe individual objects (forms, modules, classes)
 //! within a VB6 project.
 
+use std::fmt;
+
 use crate::{
     addressmap::AddressMap,
     error::Error,
@@ -387,6 +389,17 @@ impl<'a> ObjectInfo<'a> {
 /// GUIDs, control array pointers, method dispatch offsets, and P-Code
 /// method counts.
 ///
+/// # Accessor fallibility
+///
+/// [`parse`](Self::parse) validates that the fixed 0x40-byte header is
+/// present. After that, fixed-offset accessors on this type are only
+/// fallible if the already-validated backing slice is unexpectedly too
+/// short or arithmetic overflows while reading primitive fields. Resolvers
+/// and iterators that follow VAs, such as [`resolve_clsid`](Self::resolve_clsid)
+/// and [`typed_iids`](Self::typed_iids), are fail-soft and may return
+/// `None` or skip entries when pointed-to data is absent, truncated, or
+/// outside the PE image.
+///
 /// # Layout
 ///
 /// | Offset | Size | Field |
@@ -402,7 +415,7 @@ impl<'a> ObjectInfo<'a> {
 /// | 0x20 | 4 | `control_count` — number of controls |
 /// | 0x24 | 4 | `controls_va` — VA of ControlInfo array |
 /// | 0x28 | 2 | `method_link_count` — method link entries |
-/// | 0x2A | 2 | `pcode_count` — P-Code method count (439 = native sentinel) |
+/// | 0x2A | 2 | `pcode_count` — P-Code method count (`0x1B7` is the linker-emitted native marker; see [`Self::PCODE_COUNT_NATIVE_SENTINEL`]) |
 /// | 0x2C | 2 | `initialize_event_offset` — dispatch vtable byte offset |
 /// | 0x2E | 2 | `terminate_event_offset` — dispatch vtable byte offset |
 /// | 0x30 | 4 | `method_link_table_va` — VA of method link table |
@@ -548,14 +561,76 @@ impl<'a> OptionalObjectInfo<'a> {
         read_u16_le(self.bytes, 0x28)
     }
 
-    /// P-Code method count at offset 0x2A.
+    /// Native-compilation marker for the +0x2A field.
     ///
-    /// Number of methods in the dispatch table that are P-Code (as opposed
-    /// to native thunks or event stubs). The value 439 (0x1B7) is a
-    /// sentinel indicating native compilation — not an actual method count.
+    /// A raw [`pcode_count_raw`](Self::pcode_count_raw) reading of `0x1B7`
+    /// (439 decimal) does *not* mean the object has 439 P-Code methods.
+    /// Empirically every natively-compiled VB6 object surveyed has this
+    /// exact value at +0x2A; no runtime path in `MSVBVM60.DLL_6.00.9848`
+    /// reads `wPCodeCount` and checks against `0x1B7`, so the runtime
+    /// itself does not enforce a sentinel — the value is a compiler /
+    /// linker default written when there is no P-Code dispatch table to
+    /// describe. The dispatch path iterates the actual method table at
+    /// `methods_va` instead, which is the authoritative source.
+    ///
+    /// Use [`pcode_count`](Self::pcode_count) /
+    /// [`is_native_sentinel`](Self::is_native_sentinel) to consume the
+    /// field correctly. Only inspect [`pcode_count_raw`](Self::pcode_count_raw)
+    /// when reverse-engineering the layout itself.
+    pub const PCODE_COUNT_NATIVE_SENTINEL: u16 = 0x1B7;
+
+    /// Raw P-Code method count at offset 0x2A — see
+    /// [`PCODE_COUNT_NATIVE_SENTINEL`](Self::PCODE_COUNT_NATIVE_SENTINEL).
+    ///
+    /// Returns the on-disk u16 verbatim. Almost every caller wants
+    /// [`pcode_count`](Self::pcode_count) instead, which folds the
+    /// native-compilation sentinel down to `0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying bytes cannot be read.
+    #[inline]
+    pub fn pcode_count_raw(&self) -> Result<u16, Error> {
+        read_u16_le(self.bytes, 0x2A)
+    }
+
+    /// P-Code method count at offset 0x2A, with the native-compilation
+    /// sentinel folded to `0`.
+    ///
+    /// The field at +0x2A normally counts the P-Code-bearing slots in
+    /// this object's method dispatch table. The VB6 linker writes the
+    /// magic value [`PCODE_COUNT_NATIVE_SENTINEL`](Self::PCODE_COUNT_NATIVE_SENTINEL)
+    /// (`0x1B7` = 439) to mark a natively compiled object that has no
+    /// P-Code at all; consumers that surface this count to UI / DB rows
+    /// must not display 439 as a method count, and predicates like
+    /// [`VbObject::has_pcode`](crate::project::VbObject::has_pcode)
+    /// must not return `true` for a sentinel reading.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying bytes cannot be read.
     #[inline]
     pub fn pcode_count(&self) -> Result<u16, Error> {
-        read_u16_le(self.bytes, 0x2A)
+        let raw = self.pcode_count_raw()?;
+        Ok(if raw == Self::PCODE_COUNT_NATIVE_SENTINEL {
+            0
+        } else {
+            raw
+        })
+    }
+
+    /// Returns `true` when +0x2A holds the native-compilation sentinel.
+    ///
+    /// Equivalent to `pcode_count_raw()? == PCODE_COUNT_NATIVE_SENTINEL`,
+    /// but exposes the meaning as a predicate so callers don't have to
+    /// hard-code the magic value at every site.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying bytes cannot be read.
+    #[inline]
+    pub fn is_native_sentinel(&self) -> Result<bool, Error> {
+        Ok(self.pcode_count_raw()? == Self::PCODE_COUNT_NATIVE_SENTINEL)
     }
 
     /// Byte offset to the Initialize event in the dispatch vtable at 0x2C.
@@ -668,6 +743,80 @@ impl<'a> OptionalObjectInfo<'a> {
             self.events_iid_table_va().unwrap_or(0),
             self.events_iid_count().unwrap_or(0),
         )
+    }
+
+    /// Returns one iterator over all typed IID tables on this object.
+    ///
+    /// Each yielded item carries an [`IidKind`] discriminator and the
+    /// resolved GUID. Entries with unresolvable VAs are skipped with the
+    /// same fail-soft behavior as [`gui_guids`](Self::gui_guids),
+    /// [`default_iids`](Self::default_iids), and
+    /// [`events_iids`](Self::events_iids).
+    pub fn typed_iids(&self, map: &AddressMap<'_>) -> TypedIidIter {
+        let mut items = Vec::new();
+        items.extend(self.gui_guids(map).map(|(_, guid)| (IidKind::Gui, guid)));
+        items.extend(
+            self.default_iids(map)
+                .map(|(_, guid)| (IidKind::Default, guid)),
+        );
+        items.extend(
+            self.events_iids(map)
+                .map(|(_, guid)| (IidKind::Events, guid)),
+        );
+        TypedIidIter {
+            inner: items.into_iter(),
+        }
+    }
+}
+
+/// Discriminator for IID tables exposed by [`OptionalObjectInfo`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IidKind {
+    /// GUI GUID table entry.
+    Gui,
+    /// Default dispatch interface IID.
+    Default,
+    /// Event source interface IID.
+    Events,
+}
+
+impl IidKind {
+    /// Returns the stable persistence string for this IID kind.
+    ///
+    /// These strings are part of the public API contract and are suitable
+    /// for database storage: `"gui"`, `"default"`, and `"events"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Gui => "gui",
+            Self::Default => "default",
+            Self::Events => "events",
+        }
+    }
+}
+
+impl fmt::Display for IidKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Iterator over typed IIDs from all [`OptionalObjectInfo`] IID tables.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct TypedIidIter {
+    /// Pre-collected typed IID entries.
+    inner: std::vec::IntoIter<(IidKind, Guid)>,
+}
+
+impl Iterator for TypedIidIter {
+    /// Yields `(kind, guid)` pairs.
+    type Item = (IidKind, Guid);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
 
@@ -818,8 +967,26 @@ mod tests {
         data[0x2A..0x2C].copy_from_slice(&3u16.to_le_bytes()); // pcode_count
         data[0x20..0x24].copy_from_slice(&7u32.to_le_bytes()); // control_count
         let opt = OptionalObjectInfo::parse(&data).unwrap();
+        assert_eq!(opt.pcode_count_raw().unwrap(), 3);
         assert_eq!(opt.pcode_count().unwrap(), 3);
+        assert!(!opt.is_native_sentinel().unwrap());
         assert_eq!(opt.control_count().unwrap(), 7);
+    }
+
+    #[test]
+    fn test_optional_object_info_native_sentinel() {
+        let mut data = vec![0u8; OptionalObjectInfo::SIZE];
+        // Linker writes 0x1B7 (439) at +0x2A on natively compiled objects
+        // — see `OptionalObjectInfo::PCODE_COUNT_NATIVE_SENTINEL`.
+        data[0x2A..0x2C]
+            .copy_from_slice(&OptionalObjectInfo::PCODE_COUNT_NATIVE_SENTINEL.to_le_bytes());
+        let opt = OptionalObjectInfo::parse(&data).unwrap();
+        assert_eq!(
+            opt.pcode_count_raw().unwrap(),
+            OptionalObjectInfo::PCODE_COUNT_NATIVE_SENTINEL
+        );
+        assert_eq!(opt.pcode_count().unwrap(), 0);
+        assert!(opt.is_native_sentinel().unwrap());
     }
 
     #[test]

@@ -190,6 +190,12 @@ impl<'a> PCodeMethod<'a> {
 
     /// Returns a streaming iterator over decoded P-Code instructions.
     ///
+    /// The instruction stream length is bounded by the procedure's on-disk
+    /// `u16` `proc_size` field, so a single method can contain at most
+    /// 65,535 bytes of P-Code. The decoded instruction count cannot exceed
+    /// that byte count because every decoded instruction consumes at least
+    /// one byte.
+    ///
     /// # Errors
     ///
     /// Returns an error if the underlying procedure size cannot be read.

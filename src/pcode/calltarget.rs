@@ -227,18 +227,18 @@ impl<'a> CallResolver<'a> {
 impl core::fmt::Display for CallTarget {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Api { library, function } => write!(f, "{}!{}", library, function),
+            Self::Api { library, function } => write!(f, "{library}!{function}"),
             Self::VTableMethod {
                 control_name,
                 vtable_offset,
             } => {
                 if let Some(name) = control_name {
-                    write!(f, "{}.vtbl+0x{:04X}", name, vtable_offset)
+                    write!(f, "{name}.vtbl+0x{vtable_offset:04X}")
                 } else {
-                    write!(f, "vtbl+0x{:04X}", vtable_offset)
+                    write!(f, "vtbl+0x{vtable_offset:04X}")
                 }
             }
-            Self::ImportRef { name: Some(n) } => write!(f, "{}", n),
+            Self::ImportRef { name: Some(n) } => write!(f, "{n}"),
             Self::ImportRef { name: None } => write!(f, "<import>"),
             Self::Unknown => write!(f, "<unknown>"),
         }

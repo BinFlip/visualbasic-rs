@@ -342,8 +342,7 @@ mod tests {
 
         assert!(
             classified > 1000,
-            "Expected >1000 classified opcodes, got {}",
-            classified
+            "Expected >1000 classified opcodes, got {classified}"
         );
     }
 }

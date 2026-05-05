@@ -29,7 +29,7 @@ type DynResult<T> = Result<T, Box<dyn StdError>>;
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("error: {}", e);
+        eprintln!("error: {e}");
         process::exit(1);
     }
 }
@@ -41,11 +41,10 @@ fn run() -> DynResult<()> {
     })?;
 
     let data = fs::read(&path)
-        .map_err(|e| -> Box<dyn StdError> { format!("cannot read '{}': {}", path, e).into() })?;
+        .map_err(|e| -> Box<dyn StdError> { format!("cannot read '{path}': {e}").into() })?;
 
-    let project = VbProject::from_bytes(&data).map_err(|e| -> Box<dyn StdError> {
-        format!("failed to parse VB6 project: {}", e).into()
-    })?;
+    let project = VbProject::from_bytes(&data)
+        .map_err(|e| -> Box<dyn StdError> { format!("failed to parse VB6 project: {e}").into() })?;
 
     print_asm(&project, &path)
 }
@@ -70,7 +69,7 @@ fn print_asm(project: &VbProject<'_>, path: &str) -> DynResult<()> {
 
     for (i, obj) in project.objects()?.enumerate() {
         let obj = obj.map_err(|e| -> Box<dyn StdError> {
-            format!("failed to parse object {}: {}", i, e).into()
+            format!("failed to parse object {i}: {e}").into()
         })?;
         println!();
         let gui_entry = gui_entries.get(i);
@@ -99,15 +98,14 @@ fn print_assembly_header(project: &VbProject<'_>, path: &str) -> DynResult<()> {
     let project_data_va = hdr.project_data_va()?;
     let sub_main_va = hdr.sub_main_va()?;
 
-    println!("// VB6 Assembly: {}", path);
+    println!("// VB6 Assembly: {path}");
     println!(
-        "// Runtime {}.{:02} | {} | LCID 0x{:04X} | {} objects",
-        runtime_build, runtime_revision, mode, lcid, object_count
+        "// Runtime {runtime_build}.{runtime_revision:02} | {mode} | LCID 0x{lcid:04X} | {object_count} objects"
     );
     println!("// Language DLL: {}", lossy_cstr(hdr.lang_dll()?));
     println!("// Path: {}", lossy_cstr(pd.path_info()?));
     if sub_main_va != 0 {
-        println!("// Entry: Sub Main (VA 0x{:08X})", sub_main_va);
+        println!("// Entry: Sub Main (VA 0x{sub_main_va:08X})");
     }
     println!("//");
     println!(
@@ -127,12 +125,12 @@ fn print_assembly_header(project: &VbProject<'_>, path: &str) -> DynResult<()> {
         pd.data_size()?
     );
     println!();
-    println!(".assembly {} {{", name);
+    println!(".assembly {name} {{");
     println!("    .compilation {}", mode.to_lowercase());
-    println!("    .version {}.{:02}", runtime_build, runtime_revision);
-    println!("    .lcid 0x{:08X}", lcid);
+    println!("    .version {runtime_build}.{runtime_revision:02}");
+    println!("    .lcid 0x{lcid:08X}");
     if let Some(guid) = visualbasic::vb::control::Guid::from_bytes(ot.uuid()?) {
-        println!("    .uuid {}", guid);
+        println!("    .uuid {guid}");
     }
     println!(
         "    .forms {}  .externals {}  .thunks {}",
@@ -162,7 +160,7 @@ fn print_com_registration(project: &VbProject<'_>) -> DynResult<()> {
     let proj_name = reg.project_name(map).unwrap_or("?");
     let guid = reg
         .project_guid()
-        .map(|g| format!("{}", g))
+        .map(|g| format!("{g}"))
         .unwrap_or_else(|| "?".into());
 
     println!();
@@ -173,10 +171,10 @@ fn print_com_registration(project: &VbProject<'_>) -> DynResult<()> {
         reg.minor_version()?,
         reg.lcid()?
     );
-    println!("// COM Project: {}", proj_name);
+    println!("// COM Project: {proj_name}");
 
     if let Some(help) = reg.help_dir(map) {
-        println!("// COM HelpDir: {}", help);
+        println!("// COM HelpDir: {help}");
     }
 
     let Ok(objects) = reg.objects(map) else {
@@ -185,17 +183,17 @@ fn print_com_registration(project: &VbProject<'_>) -> DynResult<()> {
     for obj in objects {
         let clsid = obj
             .clsid()
-            .map(|g| format!("{}", g))
+            .map(|g| format!("{g}"))
             .unwrap_or_else(|| "?".into());
         let name = obj.object_name(map).unwrap_or("?");
         let desc = obj.description(map);
-        let prog_id = format!("{}.{}", proj_name, name);
+        let prog_id = format!("{proj_name}.{name}");
         let object_flags = obj.object_flags()?;
 
-        println!("//   .comclass {} {{", prog_id);
-        println!("//       CLSID = {}", clsid);
+        println!("//   .comclass {prog_id} {{");
+        println!("//       CLSID = {clsid}");
         if let Some(d) = desc {
-            println!("//       Description = \"{}\"", d);
+            println!("//       Description = \"{d}\"");
         }
         println!(
             "//       Flags = 0x{:04X}{}",
@@ -204,24 +202,24 @@ fn print_com_registration(project: &VbProject<'_>) -> DynResult<()> {
         );
         let misc = obj.misc_status()?;
         if misc != 0 {
-            println!("//       MiscStatus = {}", misc);
+            println!("//       MiscStatus = {misc}");
         }
         let toolbox = obj.toolbox_bitmap_id()?;
         if toolbox != 0 {
-            println!("//       ToolboxBitmap32 = {}", toolbox);
+            println!("//       ToolboxBitmap32 = {toolbox}");
         }
         let icon = obj.default_icon_id()?;
         if icon != 0 {
-            println!("//       DefaultIcon = {}", icon);
+            println!("//       DefaultIcon = {icon}");
         }
         if let Ok(default_iface_guids) = obj.default_iface_guids(map) {
             for guid in default_iface_guids {
-                println!("//       DefaultIID = {}", guid);
+                println!("//       DefaultIID = {guid}");
             }
         }
         if let Ok(source_iface_guids) = obj.source_iface_guids(map) {
             for guid in source_iface_guids {
-                println!("//       SourceIID  = {}", guid);
+                println!("//       SourceIID  = {guid}");
             }
         }
         println!("//   }}");
@@ -249,12 +247,9 @@ fn print_gui_table(project: &VbProject<'_>) -> DynResult<()> {
         let data_va = entry.form_data_va()?;
         let data_size = entry.form_data_size()?;
         let type_flags = entry.object_type_raw()?;
-        print!(
-            ".gui /*{:02}*/ {} {} data=0x{:08X} size=0x{:X}",
-            i, otype, guid, data_va, data_size
-        );
+        print!(".gui /*{i:02}*/ {otype} {guid} data=0x{data_va:08X} size=0x{data_size:X}");
         if type_flags & 0xFFF0 != 0 {
-            print!(" flags=0x{:X}", type_flags);
+            print!(" flags=0x{type_flags:X}");
         }
         println!();
         if let Some(g2) = entry.secondary_guid() {
@@ -279,12 +274,12 @@ fn print_externals(project: &VbProject<'_>) -> DynResult<()> {
             Ok(ext) => {
                 let desc = resolve_external(project, &ext);
                 let kind_str = match ext.kind() {
-                    Ok(k) => format!("{}", k),
-                    Err(e) => format!("<error: {}>", e),
+                    Ok(k) => format!("{k}"),
+                    Err(e) => format!("<error: {e}>"),
                 };
-                println!(".extern /*{:02}*/ {} // {}", i, desc, kind_str);
+                println!(".extern /*{i:02}*/ {desc} // {kind_str}");
             }
-            Err(e) => println!(".extern /*{:02}*/ // error: {}", i, e),
+            Err(e) => println!(".extern /*{i:02}*/ // error: {e}"),
         }
     }
     Ok(())
@@ -338,9 +333,9 @@ fn print_control_types(project: &VbProject<'_>) -> DynResult<()> {
         let guid_str = format_guid_entry(entry, map);
         let name_str = entry.control_name(map).unwrap_or("");
         if name_str.is_empty() {
-            println!("    {}", guid_str);
+            println!("    {guid_str}");
         } else {
-            println!("    {} \"{}\"", guid_str, name_str);
+            println!("    {guid_str} \"{name_str}\"");
         }
     }
     if !prop_names.is_empty() {
@@ -382,9 +377,9 @@ fn format_guid_entry(
         .map(|g| {
             let class = g.control_class_name().unwrap_or("");
             if class.is_empty() {
-                format!("{}", g)
+                format!("{g}")
             } else {
-                format!("{} ({})", g, class)
+                format!("{g} ({class})")
             }
         })
         .unwrap_or_else(|| "?".into())
@@ -452,16 +447,16 @@ fn print_object(
             .ok()
             .and_then(|r| r.as_bytes())
             .map(|b| String::from_utf8_lossy(b).into_owned())
-            .unwrap_or_else(|| format!("method_{:02X}", mi));
+            .unwrap_or_else(|| format!("method_{mi:02X}"));
 
         if let Ok(ref me) = entry {
             let va = match me {
                 MethodEntry::PCode(_) => {
-                    let entry_va = methods_va_for_lookup.wrapping_add(mi as u32 * 4);
+                    let entry_va = methods_va_for_lookup.wrapping_add((mi as u32).wrapping_mul(4));
                     obj.project()
                         .address_map()
                         .slice_from_va(entry_va, 4)
-                        .map(|d| u32::from_le_bytes([d[0], d[1], d[2], d[3]]))
+                        .map(|d| <[u8; 4]>::try_from(d).map(u32::from_le_bytes).unwrap_or(0))
                         .unwrap_or(0)
                 }
                 MethodEntry::Native { va } => *va,
@@ -474,7 +469,7 @@ fn print_object(
         }
     }
 
-    println!(".object {} : {} {{", name, kind);
+    println!(".object {name} : {kind} {{");
     println!("    // Object Type:     0x{:08X}", desc.object_type_raw()?);
     println!("    // ObjectInfo VA:   0x{:08X}", desc.object_info_va()?);
     println!("    // Object Name VA:  0x{:08X}", desc.object_name_va()?);
@@ -509,8 +504,7 @@ fn print_object(
         let init_slot = init_off / 4;
         let term_slot = term_off / 4;
         println!(
-            "    // Init/Term slots: {}/{} (offsets 0x{:04X}/0x{:04X})",
-            init_slot, term_slot, init_off, term_off
+            "    // Init/Term slots: {init_slot}/{term_slot} (offsets 0x{init_off:04X}/0x{term_off:04X})"
         );
     }
     if let Some(priv_obj) = obj.private_object() {
@@ -522,11 +516,11 @@ fn print_object(
         );
         let ftd_va = priv_obj.func_type_descs_va()?;
         if ftd_va != 0 {
-            println!("    // FuncTypDescs VA: 0x{:08X}", ftd_va);
+            println!("    // FuncTypDescs VA: 0x{ftd_va:08X}");
         }
         let pn_va = priv_obj.param_names_va()?;
         if pn_va != 0 {
-            println!("    // Param Names VA:  0x{:08X}", pn_va);
+            println!("    // Param Names VA:  0x{pn_va:08X}");
         }
     }
 
@@ -556,11 +550,11 @@ fn print_object(
                 let name_str = if name.is_empty() { "?" } else { name };
                 let pcount = stub.param_count().unwrap_or(0);
                 let params = if pcount > 0 {
-                    format!(" ({} params)", pcount)
+                    format!(" ({pcount} params)")
                 } else {
                     String::new()
                 };
-                println!("    .varimpl /*{:02}*/ {}{}", i, name_str, params);
+                println!("    .varimpl /*{i:02}*/ {name_str}{params}");
             }
         }
     }
@@ -670,7 +664,7 @@ fn print_object(
             let raw_name = ctrl.name();
             let ctrl_index = ctrl.index().unwrap_or(0);
             let ctrl_name = if raw_name.is_empty() {
-                format!("control_{}", ctrl_index)
+                format!("control_{ctrl_index}")
             } else {
                 raw_name.into_owned()
             };
@@ -678,7 +672,7 @@ fn print_object(
             let class = ctrl.class_name().unwrap_or("ActiveX");
             let guid_str = ctrl.guid().map(|g| format!(" {g}")).unwrap_or_default();
 
-            println!("    .control {} As {}{}", ctrl_name, class, guid_str);
+            println!("    .control {ctrl_name} As {class}{guid_str}");
 
             // Show events from event_table_va (runtime-populated, rarely on disk)
             let event_count = ctrl.event_count().unwrap_or(0);
@@ -688,9 +682,9 @@ fn print_object(
                     continue;
                 }
                 if let Some((mi, mname)) = va_to_method.get(&handler_va) {
-                    println!("        event[{:02}] -> /*{:02X}*/ {}", ei, mi, mname);
+                    println!("        event[{ei:02}] -> /*{mi:02X}*/ {mname}");
                 } else {
-                    println!("        event[{:02}] -> 0x{:08X}", ei, handler_va);
+                    println!("        event[{ei:02}] -> 0x{handler_va:08X}");
                 }
             }
 
@@ -719,9 +713,9 @@ fn print_object(
                             slot, thunk.event_dispatch_id, method_ref
                         );
                     } else if let Some(native) = sink.resolve_native_thunk(slot, map) {
-                        println!("        sink[{:02}] {ev_name} native {native}", slot);
+                        println!("        sink[{slot:02}] {ev_name} native {native}");
                     } else {
-                        println!("        sink[{:02}] {ev_name} -> 0x{:08X}", slot, raw_va);
+                        println!("        sink[{slot:02}] {ev_name} -> 0x{raw_va:08X}");
                     }
                 }
             }
@@ -745,7 +739,13 @@ fn print_object(
     let descriptor_method_count = obj.descriptor().method_count().unwrap_or(0);
     let total = descriptor_method_count
         .max(method_entries.len() as u32)
-        .max(links.keys().copied().max().map_or(0, |m| m as u32 + 1));
+        .max(
+            links
+                .keys()
+                .copied()
+                .max()
+                .map_or(0, |m| (m as u32).saturating_add(1)),
+        );
 
     // Print unified .method blocks
     for mi in 0..total as usize {
@@ -782,7 +782,7 @@ fn print_object(
         }
 
         println!();
-        println!("    .method /*{:02X}*/ {} {{", mi, header);
+        println!("    .method /*{mi:02X}*/ {header} {{");
 
         // Show optional parameter defaults (only if function has Optional args)
         if let Some(ftd) = func_descs.get(&mi) {
@@ -827,7 +827,7 @@ fn print_object(
         if let Some(Ok(MethodEntry::PCode(method))) = entry {
             let pdi = method.proc_dsc();
             let proc_size = method.proc_size()?;
-            let pdi_va = method.pcode_va() + proc_size as u32;
+            let pdi_va = method.pcode_va().wrapping_add(proc_size as u32);
             println!(
                 "        // pcode_va=0x{:08X} proc_dsc=0x{:08X} frame=0x{:04X} pcode=0x{:04X} args={} cleanup={} opt_flags=0x{:04X} bos_skip=0x{:04X} actual_size=0x{:04X}",
                 method.pcode_va(),
@@ -858,13 +858,13 @@ fn print_object(
                             _ => None,
                         });
                         if let Some(name) = annotation {
-                            println!("        {} // {name}", i);
+                            println!("        {i} // {name}");
                         } else {
-                            println!("        {}", i);
+                            println!("        {i}");
                         }
                     }
                     Err(e) => {
-                        println!("        // decode error: {}", e);
+                        println!("        // decode error: {e}");
                         break;
                     }
                 }
@@ -937,16 +937,13 @@ fn print_class_form_public_bytes(project: &VbProject<'_>, pb_va: u32) {
     };
 
     let instance_size = cfpb.instance_size().unwrap_or(0);
-    println!(
-        "    // instance_size=0x{:04X} ({} bytes)",
-        instance_size, instance_size
-    );
+    println!("    // instance_size=0x{instance_size:04X} ({instance_size} bytes)");
 
     if let Some(iid) = cfpb.default_iid() {
-        println!("    // default_iid={}", iid);
+        println!("    // default_iid={iid}");
     }
     if let Some(iid) = cfpb.events_iid() {
-        println!("    // events_iid={}", iid);
+        println!("    // events_iid={iid}");
     }
 
     if cfpb.has_controls() {
@@ -970,7 +967,7 @@ fn print_class_form_public_bytes(project: &VbProject<'_>, pb_va: u32) {
 /// Converts a null-terminated byte slice to a lossy UTF-8 string.
 fn lossy_cstr(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
+    String::from_utf8_lossy(bytes.get(..end).unwrap_or(bytes)).into_owned()
 }
 
 /// Build a map of method_index -> FuncTypDesc from the PrivateObjectDescriptor.
@@ -990,16 +987,18 @@ fn build_func_type_descs<'a>(obj: &VbObject<'a, 'a>) -> HashMap<usize, FuncTypDe
     // The FuncTypDesc pointer array has one entry per function+variable
     let func_count = priv_obj.func_count().unwrap_or(0) as u32;
     let var_count = priv_obj.var_count().unwrap_or(0) as u32;
-    let total = func_count + var_count;
+    let total = func_count.saturating_add(var_count);
     let am = obj.project().address_map();
 
     for i in 0..total {
         // Read the VA of this FuncTypDesc entry
-        let ptr_va = ftd_array_va.wrapping_add(i * 4);
+        let ptr_va = ftd_array_va.wrapping_add(i.wrapping_mul(4));
         let Ok(ptr_data) = am.slice_from_va(ptr_va, 4) else {
             continue;
         };
-        let desc_va = u32::from_le_bytes([ptr_data[0], ptr_data[1], ptr_data[2], ptr_data[3]]);
+        let desc_va = <[u8; 4]>::try_from(ptr_data)
+            .map(u32::from_le_bytes)
+            .unwrap_or(0);
         if desc_va == 0 {
             continue;
         }

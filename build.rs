@@ -1,4 +1,11 @@
 //! Build script: generates static lookup tables from CSV data files.
+#![allow(
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unwrap_used
+)]
 //!
 //! Reads CSVs at build time and produces:
 //! - `opcode_generated.rs` — 6 static `[OpcodeInfo; 256]` opcode arrays
@@ -145,11 +152,10 @@ fn main() {
     for (table_idx, (name, variant)) in table_names.iter().zip(table_variants.iter()).enumerate() {
         writeln!(
             out,
-            "/// Opcode table for {} (table index {}).",
-            name, table_idx
+            "/// Opcode table for {name} (table index {table_idx})."
         )
         .unwrap();
-        writeln!(out, "pub static {}: [OpcodeInfo; 256] = [", name).unwrap();
+        writeln!(out, "pub static {name}: [OpcodeInfo; 256] = [").unwrap();
 
         for opcode in 0..=255u8 {
             let default = OpcodeEntry {
@@ -414,7 +420,7 @@ fn generate_event_templates(out: &mut fs::File) {
     )
     .unwrap();
     for (_, name) in &standard_events {
-        writeln!(out, "    {:?},", name).unwrap();
+        writeln!(out, "    {name:?},").unwrap();
     }
     writeln!(out, "];").unwrap();
     writeln!(out).unwrap();
@@ -427,7 +433,7 @@ fn generate_event_templates(out: &mut fs::File) {
     )
     .unwrap();
     for (_, name) in &form_events {
-        writeln!(out, "    {:?},", name).unwrap();
+        writeln!(out, "    {name:?},").unwrap();
     }
     writeln!(out, "];").unwrap();
     writeln!(out).unwrap();
@@ -436,7 +442,7 @@ fn generate_event_templates(out: &mut fs::File) {
     writeln!(out, "/// Timer event overrides (slot, name).").unwrap();
     writeln!(out, "pub static TIMER_EVENTS: &[(usize, &str)] = &[",).unwrap();
     for (slot, name) in &timer_events {
-        writeln!(out, "    ({}, {:?}),", slot, name).unwrap();
+        writeln!(out, "    ({slot}, {name:?}),").unwrap();
     }
     writeln!(out, "];").unwrap();
     writeln!(out).unwrap();
@@ -459,7 +465,7 @@ fn generate_event_templates(out: &mut fs::File) {
     )
     .unwrap();
     for (_, name) in &usercontrol_events {
-        writeln!(out, "    {:?},", name).unwrap();
+        writeln!(out, "    {name:?},").unwrap();
     }
     writeln!(out, "];").unwrap();
     writeln!(out).unwrap();
@@ -503,7 +509,7 @@ fn generate_vb6_constants(out: &mut fs::File) {
     const_entries.sort_by_key(|(v, _)| *v);
 
     for (value, name) in &const_entries {
-        writeln!(out, "        ({}, {:?}),", value, name).unwrap();
+        writeln!(out, "        ({value}, {name:?}),").unwrap();
     }
 
     writeln!(out, "    ];").unwrap();
@@ -559,7 +565,7 @@ fn normalize_operand_format(raw: &str) -> String {
             let spec = chars[i + 1];
             match spec {
                 '1' | '2' | '4' | 'a' | 's' | 'l' | 'c' | 'v' | 'x' | '}' => {
-                    result.push(format!("%{}", spec));
+                    result.push(format!("%{spec}"));
                     i += 2;
                     continue;
                 }
@@ -695,7 +701,7 @@ fn generate_control_properties(out_dir: &str) {
             props.len()
         )
         .unwrap();
-        writeln!(out, "static {}: &[(u8, PropertyDesc)] = &[", table_name).unwrap();
+        writeln!(out, "static {table_name}: &[(u8, PropertyDesc)] = &[").unwrap();
         for PropEntry {
             index: idx,
             name,
@@ -706,8 +712,7 @@ fn generate_control_properties(out_dir: &str) {
         {
             writeln!(
                 out,
-                "    ({}, PropertyDesc {{ name: {:?}, prop_type: super::PropType::{}, ser_type: {}, callback_bytes: {} }}),",
-                idx, name, prop_type, ser_type, callback_bytes
+                "    ({idx}, PropertyDesc {{ name: {name:?}, prop_type: super::PropType::{prop_type}, ser_type: {ser_type}, callback_bytes: {callback_bytes} }}),"
             )
             .unwrap();
         }
@@ -777,7 +782,7 @@ fn generate_control_properties(out_dir: &str) {
     for (ctrl_name, ctype_id) in &ctype_map {
         let table_name = format!("{}_PROPS", ctrl_name.to_uppercase());
         if control_props.contains_key(*ctrl_name) {
-            writeln!(out, "        {} => {},", ctype_id, table_name).unwrap();
+            writeln!(out, "        {ctype_id} => {table_name},").unwrap();
         }
     }
 
@@ -815,7 +820,7 @@ fn classify_fpu_inplace(mnemonic: &str, category: &str, fpu_pops: u8, fpu_push: 
 fn classify_data_type(mnemonic: &str) -> String {
     let dt = extract_data_type_suffix(mnemonic);
     match dt {
-        Some(s) => format!("Some(PCodeDataType::{})", s),
+        Some(s) => format!("Some(PCodeDataType::{s})"),
         None => "None".to_string(),
     }
 }
@@ -904,16 +909,16 @@ fn classify_semantics(mnemonic: &str, category: &str) -> String {
         "store_ind" => "OpcodeSemantics::Store { target: StoreTarget::Indirect }".to_string(),
         "arith" => {
             let op = classify_arith_op(mnemonic);
-            format!("OpcodeSemantics::Arithmetic {{ op: ArithOp::{} }}", op)
+            format!("OpcodeSemantics::Arithmetic {{ op: ArithOp::{op} }}")
         }
         "unary" => {
             let op = classify_unary_op(mnemonic);
-            format!("OpcodeSemantics::Unary {{ op: ArithOp::{} }}", op)
+            format!("OpcodeSemantics::Unary {{ op: ArithOp::{op} }}")
         }
         "compare" => "OpcodeSemantics::Compare".to_string(),
         "convert" => {
             let (from, to) = classify_convert_types(mnemonic);
-            format!("OpcodeSemantics::Convert {{ from: {}, to: {} }}", from, to)
+            format!("OpcodeSemantics::Convert {{ from: {from}, to: {to} }}")
         }
         "branch" => {
             let conditional = mnemonic.contains("BranchF")
@@ -922,7 +927,7 @@ fn classify_semantics(mnemonic: &str, category: &str) -> String {
                 || mnemonic.starts_with("For")
                 || mnemonic.starts_with("ExitFor")
                 || mnemonic.starts_with("On");
-            format!("OpcodeSemantics::Branch {{ conditional: {} }}", conditional)
+            format!("OpcodeSemantics::Branch {{ conditional: {conditional} }}")
         }
         "call" => {
             let kind = if mnemonic.starts_with("ThisVCall") {
@@ -936,7 +941,7 @@ fn classify_semantics(mnemonic: &str, category: &str) -> String {
             } else {
                 "Other"
             };
-            format!("OpcodeSemantics::Call {{ kind: CallKind::{} }}", kind)
+            format!("OpcodeSemantics::Call {{ kind: CallKind::{kind} }}")
         }
         "return" => "OpcodeSemantics::Return".to_string(),
         "stack" => "OpcodeSemantics::Stack".to_string(),
@@ -1037,7 +1042,7 @@ fn classify_convert_types(mnemonic: &str) -> (String, String) {
     for &(prefix, target_dt) in targets {
         if let Some(rest) = name.strip_prefix(prefix) {
             let source = suffix_to_data_type(rest);
-            let to = format!("Some(PCodeDataType::{})", target_dt);
+            let to = format!("Some(PCodeDataType::{target_dt})");
             return (source, to);
         }
     }
@@ -1063,7 +1068,7 @@ fn suffix_to_data_type(s: &str) -> String {
         "FPR8" => "FPR8",
         _ => return "None".to_string(),
     };
-    format!("Some(PCodeDataType::{})", dt)
+    format!("Some(PCodeDataType::{dt})")
 }
 
 /// Map a CSV calling convention string to the Rust enum variant path.

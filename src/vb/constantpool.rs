@@ -547,7 +547,7 @@ mod tests {
 
         let entry = pool.resolve(0).unwrap();
         let ConstPoolEntry::BStr(bstr) = entry else {
-            panic!("expected BStr, got {:?}", entry);
+            panic!("expected BStr, got {entry:?}");
         };
         assert_eq!(bstr.byte_length(), 6);
         assert_eq!(bstr.va(), 0x00401104);
@@ -569,7 +569,7 @@ mod tests {
 
         let entry = pool.resolve(0).unwrap();
         let ConstPoolEntry::RawVa(va) = entry else {
-            panic!("expected RawVa, got {:?}", entry);
+            panic!("expected RawVa, got {entry:?}");
         };
         assert_eq!(va, 0x00401104);
 

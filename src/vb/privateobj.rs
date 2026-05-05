@@ -53,6 +53,15 @@ use crate::{
 ///
 /// Contains per-object private data: function type descriptor pointers,
 /// variable counts, and parameter name tables.
+///
+/// # Accessor fallibility
+///
+/// [`parse`](Self::parse) validates that the fixed 0x40-byte header is
+/// present. After that, fixed-offset accessors on this type are only
+/// fallible if the already-validated backing slice is unexpectedly too
+/// short or arithmetic overflows while reading primitive fields. Methods
+/// that only inspect those primitive fields, such as [`is_class`](Self::is_class),
+/// do not follow VAs and treat unreadable fields as false predicates.
 #[derive(Clone, Copy, Debug)]
 pub struct PrivateObjectDescriptor<'a> {
     bytes: &'a [u8],

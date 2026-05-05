@@ -209,7 +209,12 @@ impl FormControlType {
         }
     }
 
-    /// Returns the human-readable control type name.
+    /// Returns the stable persistence string for this control type.
+    ///
+    /// These strings are part of the public API contract and are suitable
+    /// for database storage. Unknown raw type codes return `"Unknown"`;
+    /// use [`to_u8`](Self::to_u8) when the original numeric code must be
+    /// preserved as well.
     pub fn name(&self) -> &'static str {
         match self {
             Self::PictureBox => "PictureBox",
@@ -240,6 +245,11 @@ impl FormControlType {
             Self::UserDocument => "UserDocument",
             Self::Unknown(_) => "Unknown",
         }
+    }
+
+    /// Alias for [`name`](Self::name), matching other discriminator enums.
+    pub fn as_str(&self) -> &'static str {
+        self.name()
     }
 
     /// Returns `true` if this control type can contain child controls.
@@ -421,6 +431,8 @@ pub struct FormControlRecord<'a> {
     offset_in_blob: u32,
     /// Byte offset of the property stream within the form data blob.
     properties_offset_in_blob: u32,
+    /// Index of the containing parent control in [`FormDataParser::controls`].
+    parent_index: Option<usize>,
 }
 
 impl<'a> FormControlRecord<'a> {
@@ -519,6 +531,7 @@ impl<'a> FormControlRecord<'a> {
             depth: 0,
             offset_in_blob: 0,
             properties_offset_in_blob: properties_offset_local,
+            parent_index: None,
         })
     }
 
@@ -588,6 +601,16 @@ impl<'a> FormControlRecord<'a> {
     #[inline]
     pub fn properties_offset_in_blob(&self) -> u32 {
         self.properties_offset_in_blob
+    }
+
+    /// Index of this control's parent in [`FormDataParser::controls`].
+    ///
+    /// Returns `None` for top-level controls. The index is stable for the
+    /// lifetime of the parsed [`FormDataParser`] and refers to the flat
+    /// control slice returned by [`FormDataParser::controls`].
+    #[inline]
+    pub fn parent_index(&self) -> Option<usize> {
+        self.parent_index
     }
 
     /// Decodes the property stream into an iterator of named property values.
@@ -747,6 +770,7 @@ impl<'a> FormDataParser<'a> {
         // Now walk the marker sequence, tracking nesting depth
         pos = start;
         let mut depth: u16 = 0;
+        let mut parent_stack: Vec<usize> = Vec::new();
         while pos < data.len() {
             let cur_byte = match data.get(pos).copied() {
                 Some(b) => b,
@@ -777,9 +801,16 @@ impl<'a> FormDataParser<'a> {
                         && let Ok(mut record) = FormControlRecord::parse(slice)
                     {
                         record.depth = depth;
+                        let level = depth as usize;
+                        record.parent_index = level
+                            .checked_sub(1)
+                            .and_then(|parent_level| parent_stack.get(parent_level).copied());
                         record.offset_in_blob = pos as u32;
                         record.properties_offset_in_blob =
                             record.properties_offset_in_blob.wrapping_add(pos as u32);
+                        let record_index = controls.len();
+                        parent_stack.truncate(level);
+                        parent_stack.push(record_index);
                         controls.push(record);
                     }
                     pos = end;
@@ -802,16 +833,25 @@ impl<'a> FormDataParser<'a> {
                     if let Some(slice) = data.get(pos..)
                         && let Ok(mut record) = FormControlRecord::parse(slice)
                     {
-                        record.depth = depth.saturating_sub(1);
+                        let record_depth = depth.saturating_sub(1);
+                        record.depth = record_depth;
+                        let level = record_depth as usize;
+                        record.parent_index = level
+                            .checked_sub(1)
+                            .and_then(|parent_level| parent_stack.get(parent_level).copied());
                         record.offset_in_blob = pos as u32;
                         record.properties_offset_in_blob =
                             record.properties_offset_in_blob.wrapping_add(pos as u32);
+                        let record_index = controls.len();
+                        parent_stack.truncate(level);
+                        parent_stack.push(record_index);
                         controls.push(record);
                     }
                     pos = end;
                 }
                 FormMarker::EndChildren => {
                     depth = depth.saturating_sub(1);
+                    parent_stack.truncate(depth as usize);
                 }
             }
         }

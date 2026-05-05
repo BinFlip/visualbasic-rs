@@ -47,6 +47,13 @@ impl<'a> ComRegData<'a> {
     /// Minimum header size in bytes.
     pub const HEADER_SIZE: usize = 0x2A;
 
+    /// Minimum buffer size needed to read every fixed-offset accessor.
+    ///
+    /// Consumers that pre-slice COM registration data before calling
+    /// [`parse`](Self::parse) should use this value instead of hard-coding
+    /// a larger guess. It is currently equal to [`HEADER_SIZE`](Self::HEADER_SIZE).
+    pub const MIN_BUFFER_SIZE: usize = Self::HEADER_SIZE;
+
     /// Parses the COM registration data header.
     ///
     /// `base_va` is the VA of the structure in the PE image (needed for
