@@ -32,7 +32,7 @@ mod vbproject;
 // Re-export all public types at the module level.
 pub use methodentry::MethodEntry;
 pub use methodlink::{MethodLink, MethodLinkIterator};
-pub use pcodemethod::PCodeMethod;
+pub use pcodemethod::{PCodeMethod, StatementMarker};
 pub use vbcontrol::{ControlEntryIterator, VbControl};
 pub use vbobject::{
     CodeEntry, CodeEntryKind, EventBinding, FuncTypDescIter, MethodIterator, MethodNameResult,

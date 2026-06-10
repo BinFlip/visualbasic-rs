@@ -45,7 +45,9 @@
 //!   VBDec, Gen Digital research) or LLM hallucinated.
 //! - The [`PrivateObjectDescriptor`](privateobj::PrivateObjectDescriptor) layout was reverse-engineered
 //!   specifically for this crate by examining real binaries via BinaryNinja.
-//! - Some structures (COM\_RegData, GUITable) remain completely undocumented.
+//! - COM registration data ([`comreg`]) and the GUI table ([`guitable`]) were
+//!   reverse-engineered for this crate and are parsed, though a few of their
+//!   fields carry residual linker data with no runtime consumer (noted inline).
 //! - Field offsets and sizes are verified against MSVBVM60.DLL version 6.00.9848.
 
 pub mod bstr;

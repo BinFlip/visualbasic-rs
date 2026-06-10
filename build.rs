@@ -945,6 +945,7 @@ fn classify_semantics(mnemonic: &str, category: &str) -> String {
         }
         "return" => "OpcodeSemantics::Return".to_string(),
         "stack" => "OpcodeSemantics::Stack".to_string(),
+        "bos" => "OpcodeSemantics::Bos".to_string(),
         "nop" => "OpcodeSemantics::Nop".to_string(),
         "io" => "OpcodeSemantics::Io".to_string(),
         _ => "OpcodeSemantics::Unclassified".to_string(),

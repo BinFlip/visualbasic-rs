@@ -6,6 +6,74 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — Unreleased
+
+### Added
+
+- `CallApiStub::ordinal()`, `flags()`, and `is_by_ordinal()` — the
+  `DllFunctionCall` descriptor is 16 bytes (not 8), carrying an import ordinal
+  and a by-ordinal flag (bit 1) after the name pointers. Verified against
+  MSVBVM60.DLL `sub_660315de`. By-ordinal imports omit the API name from the
+  binary, a name-hiding signal for triage.
+- `ExternalDeclareInfo::api_stub()` resolves a `Declare`'s native stub to its
+  `CallApiStub`, exposing ordinal / by-ordinal state for declared imports
+  (e.g. `Declare ... Alias "#123"`).
+- `controlprop::CleanupAction` plus `ControlPropertyType::cleanup_action()`
+  and `is_reference()` — the runtime resource-release classification
+  (`FreeString` / `FreeVariant` / `ReleaseObject` / `DestroyArray` /
+  `UnlockArray` / `DestructRecord`) for each class/form instance member,
+  recovered from `CleanupSingleEntry` (0x66016AAA).
+- `decoder::ErrorFlow` plus `Instruction::error_flow()` — classifies a
+  `Resume` / `OnErrorGoto` instruction's signed operand into its source-level
+  construct (`Resume`, `Resume Next`, `Resume <label>`, `On Error GoTo <label>`,
+  `On Error Resume Next`, `On Error GoTo 0`). Verified against `op_Lead2_Resume`
+  and `op_OnErrorGoto`.
+- `Instruction::is_bos()` / `bos_distance()`, `OpcodeInfo::is_bos()`,
+  `OpcodeSemantics::Bos`, and `PCodeMethod::statement_markers()` returning
+  `StatementMarker { offset, distance }` — `LargeBos` is now modelled as a
+  beginning-of-statement marker whose `u8` operand is the byte distance to the
+  next statement boundary (`0` = last). This partitions a procedure's P-Code
+  into source statements.
+- `code_entrypoints()` now resolves the `Sub Main` target: a P-Code `Sub Main`
+  carries `is_pcode = true` plus `stub_va` / `data_const_va` / `pcode_size`, and
+  the entry is attributed to its owning module via `object_index` /
+  `method_index` (by matching `lpSubMain` against the collected method entries).
+
+### Changed
+
+- **(breaking)** `ControlPropertyType` variants now reflect the runtime
+  cleanup dispatcher rather than the size buckets: nibble 1 = `String`
+  (was `Short`), 2 = `Variant` (was `Integer`), 3 = `Object` (was `Long`),
+  4 = `FixedString`, 5 = `Array` (was `SafeArray`), 6 = `FixedArray`
+  (was `Variant`), 9 = `Udt` (was `Object`); inline value nibbles collapse to
+  `Value(u8)`. The previous names came from `CalcPropertyDataSize` alone, which
+  cannot distinguish a 4-byte BSTR pointer from a 4-byte `Long`.
+- **(breaking)** `LargeBos` is reclassified from `OpcodeSemantics::Nop` to
+  `OpcodeSemantics::Bos`, and its operand is documented as the distance to the
+  next statement boundary rather than a "line number."
+
+### Fixed
+
+- `Resume` and `OnErrorGoto` no longer disassemble their sentinel operands as
+  bogus jump targets (`loc_FFFF` / `loc_FFFE`). They now render as
+  `Resume Next`, `Resume`, `On Error Resume Next`, and `On Error GoTo 0` per the
+  signed-operand encoding.
+
+- Class/form instance property entry stride: `ControlPropertyEntry::total_size()`
+  is now a faithful port of `CalcPropertyDataSize` and no longer adds an extra
+  4-byte header to non-array entries. The previous `header + base` model
+  over-counted nibbles 1/2/3/6/8/9/0xB by 4 bytes, which would desync the entry
+  iterator on multi-member class tables.
+- Parser robustness: `VbProject::from_bytes` now parses the PE with resources and
+  imports skipped and goblin's permissive mode. VB6 navigation never needs
+  goblin's resource/import tables, and packed / anti-analysis samples frequently
+  carry malformed `.rsrc` or import data that made goblin's strict parser reject
+  the whole file.
+- P-Code decoder no longer reports spurious `UnexpectedEndOfPCode` errors on the
+  zero-byte alignment padding VB6 appends to each procedure (proc size is padded
+  to a 4-byte boundary). A lone trailing `0x00` previously looked like a
+  truncated `LargeBos`; the iterator now ends cleanly at an all-zero tail.
+
 ## [0.2.1] — 2026-05-04
 
 Patch release focused on parser integration ergonomics and stable

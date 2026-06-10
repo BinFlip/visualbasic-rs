@@ -13,8 +13,15 @@ use std::fmt;
 use crate::pcode::{decoder::Instruction, operand::Operand};
 
 /// Formats as `{offset:04X}  {mnemonic} {operands...}`.
+///
+/// `Resume` / `OnErrorGoto` instructions render their source-level form
+/// (`Resume Next`, `On Error GoTo 0`, …) via [`Instruction::error_flow`] rather
+/// than printing a sentinel operand as a bogus `loc_FFFF`.
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(ef) = self.error_flow() {
+            return write!(f, "{:04X}  {ef}", self.offset);
+        }
         write!(f, "{:04X}  {}", self.offset, self.info.mnemonic)?;
         for op in &self.operands {
             match op {

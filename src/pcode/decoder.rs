@@ -9,6 +9,8 @@
 //! 3. **Variable-length opcodes** (size == -1): A `u16` byte count follows the
 //!    opcode, then that many bytes of payload data.
 
+use std::fmt;
+
 use crate::{
     error::Error,
     pcode::opcode::{self, OpcodeInfo},
@@ -84,6 +86,98 @@ impl Instruction {
         let _ = self.operands.get(index)?.as_ref()?;
         self.info.data_type
     }
+
+    /// Returns `true` if this instruction is a beginning-of-statement marker.
+    ///
+    /// Convenience for [`OpcodeInfo::is_bos`]. BOS markers (`LargeBos`) delimit
+    /// source statements; see [`bos_distance`](Self::bos_distance).
+    #[inline]
+    pub fn is_bos(&self) -> bool {
+        self.info.is_bos()
+    }
+
+    /// Returns the byte distance from this BOS marker to the next one.
+    ///
+    /// `LargeBos`'s 1-byte operand is the number of bytes to the next statement
+    /// boundary (the next BOS marker, or the statement's terminating branch);
+    /// `0` marks the last statement in the procedure. Returns `None` for
+    /// non-BOS instructions.
+    #[inline]
+    pub fn bos_distance(&self) -> Option<u8> {
+        if !self.is_bos() {
+            return None;
+        }
+        match self.operands.first() {
+            Some(Some(Operand::Byte(d))) => Some(*d),
+            _ => None,
+        }
+    }
+
+    /// Classifies a `Resume` / `OnErrorGoto` instruction's signed operand into
+    /// the source-level error-flow construct it encodes.
+    ///
+    /// These opcodes carry a `%l` operand that is a **signed** `i16`: positive
+    /// values are P-Code offsets (a label/handler target), while the sentinels
+    /// `-1` (`0xFFFF`) and `-2` (`0xFFFE`) select the `Next` / bare / disable
+    /// forms. Verified against the runtime `op_Lead2_Resume` (Resume) and
+    /// `op_OnErrorGoto` (handler-address math) in MSVBVM60.DLL.
+    ///
+    /// Returns `None` for any other opcode. Prefer this over reading the raw
+    /// [`Operand::JumpTarget`], which renders a sentinel as a bogus `loc_FFFF`.
+    pub fn error_flow(&self) -> Option<ErrorFlow> {
+        let target = match self.operands.first() {
+            Some(Some(Operand::JumpTarget(v))) => *v,
+            _ => return None,
+        };
+        match self.info.mnemonic {
+            "OnErrorGoto" => Some(match target {
+                0xFFFF => ErrorFlow::OnErrorResumeNext,
+                0xFFFE => ErrorFlow::OnErrorGotoZero,
+                label => ErrorFlow::OnErrorGoto(label),
+            }),
+            "Resume" => Some(match target {
+                0xFFFF => ErrorFlow::ResumeNext,
+                0xFFFE => ErrorFlow::Resume,
+                label => ErrorFlow::ResumeLabel(label),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Source-level error-handling construct recovered from a `Resume` or
+/// `OnErrorGoto` instruction by [`Instruction::error_flow`].
+///
+/// VB6 encodes the three `On Error` and three `Resume` source forms in a single
+/// signed `i16` operand; this enum makes the encoding legible (and keeps the
+/// disassembler from printing a sentinel as `loc_FFFF`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorFlow {
+    /// `On Error GoTo <label>` — installs the handler at the given P-Code offset.
+    OnErrorGoto(u16),
+    /// `On Error Resume Next` — operand `-1` (`0xFFFF`).
+    OnErrorResumeNext,
+    /// `On Error GoTo 0` — disables error handling; operand `-2` (`0xFFFE`).
+    OnErrorGotoZero,
+    /// `Resume <label>` — resumes at the given P-Code offset.
+    ResumeLabel(u16),
+    /// `Resume Next` — resumes after the faulting statement; operand `-1` (`0xFFFF`).
+    ResumeNext,
+    /// bare `Resume` — re-executes the faulting statement; operand `-2` (`0xFFFE`).
+    Resume,
+}
+
+impl fmt::Display for ErrorFlow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OnErrorGoto(label) => write!(f, "On Error GoTo loc_{label:04X}"),
+            Self::OnErrorResumeNext => f.write_str("On Error Resume Next"),
+            Self::OnErrorGotoZero => f.write_str("On Error GoTo 0"),
+            Self::ResumeLabel(label) => write!(f, "Resume loc_{label:04X}"),
+            Self::ResumeNext => f.write_str("Resume Next"),
+            Self::Resume => f.write_str("Resume"),
+        }
+    }
 }
 
 /// Streaming iterator over P-Code instructions.
@@ -134,6 +228,19 @@ impl<'a> InstructionIterator<'a> {
     pub fn position(&self) -> usize {
         self.pos
     }
+
+    /// Returns `true` if every byte from `start` to the stream limit is `0x00`.
+    ///
+    /// VB6 pads each procedure's P-Code stream to a 4-byte boundary with zero
+    /// bytes, so `proc_size` can include 1–3 trailing pad bytes after the final
+    /// terminator. A partial "instruction" made entirely of those pad bytes
+    /// (e.g. a lone `0x00`, which would otherwise look like a truncated
+    /// `LargeBos`) is not a decode error — it is the end of the real stream.
+    fn tail_is_zero_padding(&self, start: usize) -> bool {
+        self.bytes
+            .get(start..self.limit)
+            .is_some_and(|tail| !tail.is_empty() && tail.iter().all(|&b| b == 0))
+    }
 }
 
 impl Iterator for InstructionIterator<'_> {
@@ -141,6 +248,18 @@ impl Iterator for InstructionIterator<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.limit {
+            return None;
+        }
+
+        // VB6 pads each procedure's P-Code to a 4-byte boundary with zero
+        // bytes. Once everything remaining is `0x00`, the real instruction
+        // stream is over — stop cleanly rather than decoding the padding (a
+        // lone trailing `0x00` otherwise looks like a truncated `LargeBos`,
+        // and an even pad like `00 00` like a spurious BOS marker). Real code
+        // never reaches an all-zero tail: procedures end on a terminator, not
+        // on padding.
+        if self.tail_is_zero_padding(self.pos) {
+            self.pos = self.limit;
             return None;
         }
 
@@ -425,6 +544,81 @@ mod tests {
         let results: Vec<_> = iter.collect();
         // At least one result should be an error
         assert!(results.iter().any(|r| r.is_err()));
+    }
+
+    #[test]
+    fn test_trailing_zero_padding_is_clean_end() {
+        // ExitProcHresult (0x13, size 1) then a single 0x00 alignment pad byte.
+        // The lone pad would look like a truncated LargeBos; it must instead
+        // terminate the stream cleanly with no error.
+        let insns = decode_all(&[0x13, 0x00]);
+        assert_eq!(insns.len(), 1);
+        assert_eq!(insns[0].info.mnemonic, "ExitProcHresult");
+    }
+
+    #[test]
+    fn test_trailing_double_zero_padding_no_spurious_bos() {
+        // ExitProc (0x14) then two 0x00 pad bytes — a clean `00 00` would decode
+        // as a LargeBos; as trailing padding it must be dropped, leaving one insn.
+        let insns = decode_all(&[0x14, 0x00, 0x00]);
+        assert_eq!(insns.len(), 1);
+        assert_eq!(insns[0].info.mnemonic, "ExitProc");
+    }
+
+    #[test]
+    fn test_midstream_zeros_followed_by_code_still_decode() {
+        // A LargeBos `00 00` followed by real code is NOT a trailing tail, so it
+        // must still decode (the padding guard only fires on an all-zero tail).
+        let insns = decode_all(&[0x00, 0x00, 0x14]);
+        assert_eq!(insns.len(), 2);
+        assert_eq!(insns[0].info.mnemonic, "LargeBos");
+        assert_eq!(insns[1].info.mnemonic, "ExitProc");
+    }
+
+    #[test]
+    fn test_bos_marker_and_distance() {
+        // LargeBos (0x00), operand 0x08 = distance to next statement.
+        let b = decode_all(&[0x00, 0x08]);
+        assert_eq!(b[0].info.mnemonic, "LargeBos");
+        assert!(b[0].is_bos());
+        assert_eq!(b[0].bos_distance(), Some(0x08));
+        assert!(b[0].error_flow().is_none());
+        // A non-BOS instruction reports neither.
+        let e = decode_all(&[0x14]); // ExitProc
+        assert!(!e[0].is_bos());
+        assert_eq!(e[0].bos_distance(), None);
+    }
+
+    #[test]
+    fn test_error_flow_onerrorgoto() {
+        // OnErrorGoto (0x4B), %l operand.
+        let lbl = decode_all(&[0x4B, 0x00, 0x01]); // operand 0x0100
+        assert_eq!(lbl[0].error_flow(), Some(ErrorFlow::OnErrorGoto(0x0100)));
+        assert_eq!(format!("{}", lbl[0]), "0000  On Error GoTo loc_0100");
+
+        let next = decode_all(&[0x4B, 0xFF, 0xFF]); // -1
+        assert_eq!(next[0].error_flow(), Some(ErrorFlow::OnErrorResumeNext));
+        assert_eq!(format!("{}", next[0]), "0000  On Error Resume Next");
+
+        let zero = decode_all(&[0x4B, 0xFE, 0xFF]); // -2
+        assert_eq!(zero[0].error_flow(), Some(ErrorFlow::OnErrorGotoZero));
+        assert_eq!(format!("{}", zero[0]), "0000  On Error GoTo 0");
+    }
+
+    #[test]
+    fn test_error_flow_resume() {
+        // Resume lives in the Lead2 table (prefix 0xFD, opcode 0x0C).
+        let next = decode_all(&[0xFD, 0x0C, 0xFF, 0xFF]); // -1
+        assert_eq!(next[0].error_flow(), Some(ErrorFlow::ResumeNext));
+        assert_eq!(format!("{}", next[0]), "0000  Resume Next");
+
+        let bare = decode_all(&[0xFD, 0x0C, 0xFE, 0xFF]); // -2
+        assert_eq!(bare[0].error_flow(), Some(ErrorFlow::Resume));
+        assert_eq!(format!("{}", bare[0]), "0000  Resume");
+
+        let lbl = decode_all(&[0xFD, 0x0C, 0x0B, 0x00]); // 0x000B
+        assert_eq!(lbl[0].error_flow(), Some(ErrorFlow::ResumeLabel(0x000B)));
+        assert_eq!(format!("{}", lbl[0]), "0000  Resume loc_000B");
     }
 
     #[test]

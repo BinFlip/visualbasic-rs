@@ -42,7 +42,10 @@
 //!
 //! Reverse-engineered from pe\_x86\_vb\_loader sample. The format is confirmed
 //! for standard modules (`mod_Variaveis`, `modUtil`). Class/form objects use
-//! a different format at the same VA which is not yet parsed.
+//! a different format at the same VA — the per-instance member descriptor
+//! table — parsed by [`ClassFormPublicBytes`] and
+//! [`controlprop`](super::controlprop) (member types and resource-cleanup
+//! classification verified against the runtime init/cleanup dispatchers).
 
 use crate::{
     error::Error,
@@ -596,7 +599,7 @@ mod tests {
         let entries: Vec<_> = cfpb.control_entries().collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].frame_offset().unwrap(), 0x38);
-        assert_eq!(entries[0].property_type(), ControlPropertyType::SafeArray);
+        assert_eq!(entries[0].property_type(), ControlPropertyType::Array);
         assert_eq!(entries[0].flags(), 0x00);
     }
 

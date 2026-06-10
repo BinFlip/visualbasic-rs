@@ -159,7 +159,7 @@ impl<'a> CleanupTable<'a> {
 ///   +0x0A  u16  wTotalSize         0x18 + primary_table_size
 ///   +0x0C  u16  wProcOptFlags      error handling (bit 4=OnError, bit 5=ResumeNext)
 ///   +0x0E  u16  reserved
-///   +0x10  u16  wBosSkipTableOff   Resume instruction-size table offset
+///   +0x10  u16  wResumeFixupOff    Resume Next fallback fixup-table offset (usually 0)
 ///   +0x12  u16  base_iface_slot    (init_event_offset/4) - 1
 ///   +0x14  u16  reserved
 ///   +0x16  u16  reserved
@@ -320,39 +320,38 @@ impl<'a> ProcDscInfo<'a> {
         read_u16_le(self.bytes, 0x0E)
     }
 
-    /// Operand-size skip table offset at offset 0x10.
+    /// `Resume Next` fixup-table offset at offset 0x10.
     ///
-    /// Self-relative offset from the start of ProcDscInfo to a **per-opcode
-    /// instruction size table** used by `Resume Next` error recovery.
+    /// Self-relative offset from the start of `ProcDscInfo` to a per-procedure
+    /// fixup table consulted by the runtime's `Resume Next` handler
+    /// (`op_Lead2_Resume` at 0x6610F212) — and **only** on a narrow fallback
+    /// path. Earlier revisions of this crate mislabelled the field
+    /// `wBosSkipTableOffset` and treated it as a per-opcode instruction-size
+    /// table; subsequent reverse engineering (see below) shows that is wrong.
     ///
-    /// # BOS Skip Table Layout (traced from `op_Lead2_Resume` at 0x6610f212)
+    /// # How `Resume` actually works
     ///
-    /// ```text
-    /// table_base = ProcDscInfo_VA + bos_skip_table_offset
-    /// skip_bytes = *(u16*)(table_base + opcode * 2 + 2)
-    /// ```
+    /// `op_Lead2_Resume` dispatches on the `Resume` instruction's signed operand:
+    /// `Resume <label>` (positive) jumps directly; bare `Resume` (`-2`)
+    /// re-dispatches the faulting statement; `Resume Next` (`-1`) advances to the
+    /// next statement. That advance normally uses the **inline length byte of the
+    /// `LargeBos` statement marker** at the saved position — *not* this field.
+    /// This field's table is the rare fallback used only when the saved position
+    /// is **not** a BOS marker.
     ///
-    /// The table is an array of u16 values with one entry per primary opcode
-    /// (0x00-0xFF). Entry `[N+1]` gives the total byte length of instruction
-    /// with primary opcode N (including the opcode byte itself). The first
-    /// u16 at offset +0 is a sentinel/header (skipped by the `+ 2` in the
-    /// runtime lookup).
+    /// # Why it is almost always zero
     ///
-    /// For BOS markers (opcode 0 or 1), the table is not consulted — the
-    /// instruction size comes directly from the marker's operand byte.
-    ///
-    /// Zero when the method has no `Resume` / `Resume Next` capability
-    /// (i.e., `proc_opt_flags` has no error handling bits set).
-    ///
-    /// # Error Handler Dispatch
-    ///
-    /// There is no separate "error handler table" structure. The `On Error
-    /// GoTo <label>` statement (opcode 0x4B) stores the handler's P-Code
-    /// address directly into the runtime state at `EBP-0x3C`. The BOS skip
-    /// table only handles the `Resume Next` case (advancing past the
-    /// faulting instruction).
+    /// Across a 100-binary VB6 malware corpus this field is `0` for the vast
+    /// majority of methods — including 457 of 461 methods that contain a literal
+    /// `Resume` opcode — because the fallback path is essentially never compiled.
+    /// `0` is therefore the normal, expected value, **not** "missing data." A
+    /// small population of (non-error) methods carry a non-zero value equal to
+    /// the procedure's `total_size`/`actual_size` that points at the following
+    /// procedure's P-Code rather than a real table; treat any non-zero value
+    /// with suspicion. No populated table exists in the corpus, so the table's
+    /// in-file format/extent is unconfirmed.
     #[inline]
-    pub fn bos_skip_table_offset(&self) -> Result<u16, Error> {
+    pub fn resume_fixup_table_offset(&self) -> Result<u16, Error> {
         read_u16_le(self.bytes, 0x10)
     }
 
@@ -725,7 +724,7 @@ mod tests {
         let _ = pdi.total_size().unwrap();
         let _ = pdi.proc_opt_flags().unwrap();
         let _ = pdi.reserved_0e().unwrap();
-        let _ = pdi.bos_skip_table_offset().unwrap();
+        let _ = pdi.resume_fixup_table_offset().unwrap();
         let _ = pdi.base_iface_slot_count().unwrap();
         let _ = pdi.reserved_14().unwrap();
         let _ = pdi.reserved_16().unwrap();

@@ -36,6 +36,20 @@ pub struct PCodeMethod<'a> {
     stub_va: u32,
 }
 
+/// A beginning-of-statement marker discovered in a procedure's P-Code.
+///
+/// Returned by [`PCodeMethod::statement_markers`]. Each corresponds to a
+/// `LargeBos` instruction the compiler emits at the start of a source
+/// statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatementMarker {
+    /// P-Code offset of the `LargeBos` marker (the statement boundary).
+    pub offset: u16,
+    /// Byte distance from this marker to the next statement boundary, taken
+    /// from the marker's operand. `0` marks the last statement in the procedure.
+    pub distance: u8,
+}
+
 impl<'a> PCodeMethod<'a> {
     /// Parses a P-Code method from a method table entry.
     ///
@@ -204,6 +218,32 @@ impl<'a> PCodeMethod<'a> {
             self.pcode_bytes,
             self.proc_dsc.proc_size()?,
         ))
+    }
+
+    /// Returns the procedure's beginning-of-statement markers, in order.
+    ///
+    /// Each `LargeBos` marker ([`Instruction::is_bos`](crate::pcode::decoder::Instruction::is_bos))
+    /// starts a source statement, so these markers partition the instruction
+    /// stream into statements. Each [`StatementMarker`] carries its P-Code
+    /// offset and the byte distance to the next boundary (`0` for the last
+    /// statement). Instructions that fail to decode are skipped (fail-soft), so
+    /// a mid-stream decode error simply truncates the marker list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if the instruction stream cannot be created
+    /// (e.g. the procedure size cannot be read).
+    pub fn statement_markers(&self) -> Result<Vec<StatementMarker>, Error> {
+        let mut out = Vec::new();
+        for insn in self.instructions()?.flatten() {
+            if let Some(distance) = insn.bos_distance() {
+                out.push(StatementMarker {
+                    offset: insn.offset,
+                    distance,
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Iterates the procedure's local-variable cleanup table entries.

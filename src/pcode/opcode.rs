@@ -159,6 +159,18 @@ impl OpcodeInfo {
     pub fn is_call(&self) -> bool {
         matches!(self.semantics, OpcodeSemantics::Call { .. })
     }
+
+    /// Returns `true` if this opcode is a beginning-of-statement marker.
+    ///
+    /// Matches [`OpcodeSemantics::Bos`] — the `LargeBos` markers (primary
+    /// `0x00`/`0x02`, Lead1 `0xC4`, Lead4 `0x1C`) the compiler emits at the
+    /// start of each source statement. Their 1-byte operand is the byte
+    /// distance to the next BOS (`0` = last statement). Useful for grouping a
+    /// procedure's instruction stream into statements.
+    #[inline]
+    pub fn is_bos(&self) -> bool {
+        matches!(self.semantics, OpcodeSemantics::Bos)
+    }
 }
 
 /// Sentinel returned by [`lookup`] when a lead byte's secondary opcode index

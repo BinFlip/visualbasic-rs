@@ -122,7 +122,14 @@ pub enum OpcodeSemantics {
     Return,
     /// Stack manipulation (free, pop, push temp, etc.).
     Stack,
-    /// Debug/NOP marker (Bos, LargeBos).
+    /// Beginning-of-statement marker (`LargeBos`).
+    ///
+    /// Marks the start of a source statement. The 1-byte operand is the byte
+    /// distance to the next BOS marker (`0` = last statement in the procedure),
+    /// used by the runtime for `Resume Next` advancement and `Erl` line
+    /// tracking. Carries no stack or data effect.
+    Bos,
+    /// Debug/NOP marker.
     Nop,
     /// I/O operation (Print, Input, Open, Close, Get, Put).
     Io,
@@ -286,9 +293,10 @@ mod tests {
             }
         );
 
-        // LargeBos → Nop
+        // LargeBos → Bos (beginning-of-statement marker)
         let info = &PRIMARY_TABLE[0x00];
-        assert_eq!(info.semantics, OpcodeSemantics::Nop);
+        assert_eq!(info.semantics, OpcodeSemantics::Bos);
+        assert!(info.is_bos());
 
         // InvalidExcode → Unclassified
         let info = &PRIMARY_TABLE[0x01];

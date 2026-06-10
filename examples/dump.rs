@@ -406,7 +406,14 @@ fn resolve_external(
             if let Some(decl) = ext.as_declare(map) {
                 let lib = decl.library_name(map).unwrap_or("?");
                 let func = decl.function_name(map).unwrap_or("?");
-                format!("{lib}!{func}")
+                // Surface by-ordinal imports — the API name is absent and the
+                // runtime resolves via GetProcAddress(ordinal), a name-hiding tell.
+                match decl.api_stub(map) {
+                    Some(stub) if stub.is_by_ordinal() => {
+                        format!("{lib}!#{}", stub.ordinal().unwrap_or(0))
+                    }
+                    _ => format!("{lib}!{func}"),
+                }
             } else {
                 format!("va=0x{obj_va:08X}")
             }
@@ -829,7 +836,7 @@ fn print_object(
             let proc_size = method.proc_size()?;
             let pdi_va = method.pcode_va().wrapping_add(proc_size as u32);
             println!(
-                "        // pcode_va=0x{:08X} proc_dsc=0x{:08X} frame=0x{:04X} pcode=0x{:04X} args={} cleanup={} opt_flags=0x{:04X} bos_skip=0x{:04X} actual_size=0x{:04X}",
+                "        // pcode_va=0x{:08X} proc_dsc=0x{:08X} frame=0x{:04X} pcode=0x{:04X} args={} cleanup={} opt_flags=0x{:04X} resume_fixup=0x{:04X} actual_size=0x{:04X}",
                 method.pcode_va(),
                 pdi_va,
                 method.frame_size()?,
@@ -837,7 +844,7 @@ fn print_object(
                 pdi.arg_count()?,
                 pdi.cleanup_count()?,
                 pdi.proc_opt_flags_raw()?,
-                pdi.bos_skip_table_offset()?,
+                pdi.resume_fixup_table_offset()?,
                 pdi.actual_size()?
             );
             for entry in method.proc_dsc().cleanup_entries() {
@@ -953,12 +960,19 @@ fn print_class_form_public_bytes(project: &VbProject<'_>, pb_va: u32) {
             cfpb.property_count().unwrap_or(0)
         );
         for entry in cfpb.control_entries() {
+            let cleanup = entry.cleanup_action();
+            let cleanup_note = if cleanup == visualbasic::vb::controlprop::CleanupAction::None {
+                String::new()
+            } else {
+                format!(" cleanup={cleanup}")
+            };
             println!(
-                "    //   +0x{:04X}: {} (type=0x{:02X} flags=0x{:02X})",
+                "    //   +0x{:04X}: {} (type=0x{:02X} flags=0x{:02X}{})",
                 entry.frame_offset().unwrap_or(0),
                 entry.property_type(),
                 entry.raw_type(),
-                entry.flags()
+                entry.flags(),
+                cleanup_note
             );
         }
     }

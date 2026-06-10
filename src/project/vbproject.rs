@@ -6,6 +6,11 @@
 
 use std::borrow::Cow;
 
+use goblin::{
+    options::ParseMode,
+    pe::{PE, options::ParseOptions},
+};
+
 use crate::{
     addressmap::AddressMap,
     entrypoint,
@@ -76,23 +81,27 @@ pub struct CodeEntrypoint<'a> {
     /// and `object_index` / `method_index` are still authoritative.
     pub name_hint: Cow<'a, str>,
     /// Index of the owning object (form/class/module) in the object
-    /// table, or `None` for project-level entries like `Sub Main`.
+    /// table, or `None` for project-level entries. For
+    /// [`EntrypointKind::SubMain`] this is resolved to the owning module
+    /// when `lpSubMain` matches a known method entry, else `None`.
     pub object_index: Option<u16>,
     /// Method-table slot within the owning object, or `None` for
-    /// non-method entries (event handlers, `Sub Main`, native thunks
-    /// without a corresponding dispatch slot).
+    /// non-method entries (event handlers, native thunks without a
+    /// corresponding dispatch slot). Resolved for [`EntrypointKind::SubMain`]
+    /// when its target matches a known method entry.
     pub method_index: Option<u16>,
-    /// `true` if this entry is a P-Code stub. Convenience predicate
-    /// equivalent to `matches!(kind, EntrypointKind::PCodeStub)`.
+    /// `true` if this entry's code is P-Code. Always `true` for
+    /// [`EntrypointKind::PCodeStub`]; also `true` for a
+    /// [`EntrypointKind::SubMain`] whose target resolves to a P-Code method.
     pub is_pcode: bool,
-    /// Constant-pool base VA (`ObjectInfo.lpConstants`). Present only
-    /// for [`EntrypointKind::PCodeStub`].
+    /// Constant-pool base VA (`ObjectInfo.lpConstants`). Present for
+    /// P-Code entries ([`EntrypointKind::PCodeStub`], or a P-Code `Sub Main`).
     pub data_const_va: Option<u32>,
-    /// VA of the P-Code call stub. Present only for
-    /// [`EntrypointKind::PCodeStub`].
+    /// VA of the P-Code call stub. Present for P-Code entries
+    /// ([`EntrypointKind::PCodeStub`], or a P-Code `Sub Main`).
     pub stub_va: Option<u32>,
-    /// Size of the P-Code byte stream. Present only for
-    /// [`EntrypointKind::PCodeStub`].
+    /// Size of the P-Code byte stream. Present for P-Code entries
+    /// ([`EntrypointKind::PCodeStub`], or a P-Code `Sub Main`).
     pub pcode_size: Option<u16>,
 }
 
@@ -242,7 +251,16 @@ impl<'a> VbProject<'a> {
     /// Both P-Code and native-compiled VB6 binaries are accepted.
     /// Use [`is_pcode`](Self::is_pcode) to check which kind you have.
     pub fn from_bytes(file: &'a [u8]) -> Result<Self, Error> {
-        let pe = goblin::pe::PE::parse(file).map_err(|e| Error::UnrecognizedFormat {
+        // VB6 parsing navigates structures through the address map and never
+        // needs the PE resource directory. Skip resource parsing so that a
+        // malformed `.rsrc` (common in packed / anti-analysis samples, which
+        // can make goblin's strict parser reject the whole file) does not sink
+        // an otherwise-parseable VB6 binary.
+        let opts = ParseOptions::default()
+            .with_parse_resources(false)
+            .with_parse_imports(false)
+            .with_parse_mode(ParseMode::Permissive);
+        let pe = PE::parse_with_opts(file, &opts).map_err(|e| Error::UnrecognizedFormat {
             reason: format!("goblin: {e}"),
         })?;
         Self::from_goblin(file, &pe)
@@ -733,20 +751,43 @@ impl<'a> VbProject<'a> {
             }
         }
 
-        // 4. Sub Main.
+        // 4. Sub Main. `lpSubMain` (VbHeader +0x2C) is the *callable* address
+        //    the runtime invokes — for a P-Code module that is the dispatch
+        //    stub VA, for a native module the procedure VA. Both were already
+        //    collected as per-object entries above, so resolve the target by
+        //    matching that address rather than re-implementing stub detection:
+        //    a P-Code method's `stub_va` is the callable trampoline, while a
+        //    native entry has no stub and is reached at its `va`.
         let sub_main = self.vb_header.sub_main_va()?;
         if sub_main != 0 && self.map.is_va_in_image(sub_main) {
-            out.push(CodeEntrypoint {
-                va: sub_main,
-                kind: EntrypointKind::SubMain,
-                name_hint: Cow::Borrowed("Sub Main"),
-                object_index: None,
-                method_index: None,
-                is_pcode: false,
-                data_const_va: None,
-                stub_va: None,
-                pcode_size: None,
-            });
+            let matched = out
+                .iter()
+                .find(|e| e.stub_va == Some(sub_main) || (e.stub_va.is_none() && e.va == sub_main));
+            let entry = match matched {
+                Some(e) => CodeEntrypoint {
+                    va: sub_main,
+                    kind: EntrypointKind::SubMain,
+                    name_hint: Cow::Borrowed("Sub Main"),
+                    object_index: e.object_index,
+                    method_index: e.method_index,
+                    is_pcode: e.is_pcode,
+                    data_const_va: e.data_const_va,
+                    stub_va: e.stub_va,
+                    pcode_size: e.pcode_size,
+                },
+                None => CodeEntrypoint {
+                    va: sub_main,
+                    kind: EntrypointKind::SubMain,
+                    name_hint: Cow::Borrowed("Sub Main"),
+                    object_index: None,
+                    method_index: None,
+                    is_pcode: false,
+                    data_const_va: None,
+                    stub_va: None,
+                    pcode_size: None,
+                },
+            };
+            out.push(entry);
         }
 
         Ok(out)

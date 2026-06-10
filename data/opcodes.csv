@@ -20,9 +20,9 @@
 #   notes     - human-readable description
 #
 table,opcode,size,mnemonic,operand_format,pops,pushes,fpu_pops,fpu_push,mem_read,mem_write,category,handler,notes
-0,0x00,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Debug marker — reads u8 line number operand; no stack effect
+0,0x00,2,LargeBos,%1,0,0,0,0,0,0,bos,0x66108E87,Beginning-of-statement marker; %1=byte distance to next BOS (0=last statement); used by Resume Next / Erl
 0,0x01,1,InvalidExcode,,0,0,0,0,0,0,,,
-0,0x02,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Same handler as 0x00
+0,0x02,2,LargeBos,%1,0,0,0,0,0,0,bos,0x66108E87,Beginning-of-statement marker (same handler as 0x00); %1=byte distance to next BOS
 0,0x03,1,InvalidExcode,,0,0,0,0,0,0,,,
 0,0x04,3,FLdRfVar,%a,0,1,0,0,4,0,load_frame,0x66108E95,Push address of [EBP+sext(operand)] (LEA not LOAD); 4B pointer to 16B Variant
 0,0x05,3,ImpAdLdRf,%c,0,1,0,0,4,0,load_ind,0x66108EA3,Push *(const_pool_addr + sext(op)); indirect address load
@@ -728,7 +728,7 @@ table,opcode,size,mnemonic,operand_format,pops,pushes,fpu_pops,fpu_push,mem_read
 2,0xC1,1,Error,,1,0,0,0,0,0,stack,0x6610A140,Raise VB runtime error; pop error number; Err.Raise
 2,0xC2,1,Stop,,0,0,0,0,0,0,stack,0x6610CF3E,Stop statement; break into debugger
 2,0xC3,1,Erase,,-1,0,0,0,0,0,stack,0x6610A2E0,Erase array; reads frame offset; calls __vbaErase
-2,0xC4,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Large BOS (Begin Of Statement); debug marker; u8 line operand
+2,0xC4,2,LargeBos,%1,0,0,0,0,0,0,bos,0x66108E87,Beginning-of-statement marker; %1=byte distance to next BOS (0=last statement)
 2,0xC5,1,InvalidExcode,,0,0,0,0,0,0,,,
 2,0xC6,1,InvalidExcode,,0,0,0,0,0,0,,,
 2,0xC7,1,InvalidExcode,,0,0,0,0,0,0,,,
@@ -1328,7 +1328,7 @@ table,opcode,size,mnemonic,operand_format,pops,pushes,fpu_pops,fpu_push,mem_read
 5,0x19,3,PutRecOwn4,%s,4,0,0,0,0,0,io,0x6610DE65,Put with owner record (4-arg); %s=type desc
 5,0x1A,2,LitI2_Byte,%1,0,1,0,0,0,0,load_lit,0x66108FFB,Push u8 literal zero-extended to i32; %1=byte value
 5,0x1B,1,CBoolVarNull,,4,1,0,0,0,0,convert,0x661090A5,Var→Bool (null-aware); pop 16B Variant; convert; push i32 bool
-5,0x1C,2,LargeBos,%1,0,0,0,0,0,0,nop,0x66108E87,Large BOS debug marker; %1=line offset
+5,0x1C,2,LargeBos,%1,0,0,0,0,0,0,bos,0x66108E87,Beginning-of-statement marker; %1=byte distance to next BOS (0=last statement)
 5,0x1D,0,InvalidExcode,,0,0,0,0,0,0,,,
 5,0x1E,5,ImpAdCallNonVirt,%a %2,-1,0,0,0,0,0,call,0x6610FA67,Import addr non-virtual call; %a %2; direct function call
 5,0x1F,1,InvalidExcode,,0,0,0,0,0,0,,,

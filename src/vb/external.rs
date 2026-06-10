@@ -31,17 +31,32 @@ use crate::{
     vb::control::Guid,
 };
 
-/// View over a CallAPI stub structure (8 bytes).
+/// View over a CallAPI stub structure (the `DllFunctionCall` descriptor).
 ///
-/// Found in the constant pool. Each stub contains pointers to the
-/// DLL library name and API function name.
+/// This is the structure the compiler-emitted native stub pushes before
+/// `jmp DllFunctionCall` — both for `ImpAdCall*` constant-pool API calls and
+/// for `Declare` imports (via [`ExternalDeclareInfo::native_stub_va`]). The
+/// VB6 runtime reads it in `DllFunctionCall` → `sub_660315de` to resolve the
+/// import lazily via `LoadLibraryA` + `GetProcAddress`.
 ///
 /// # Layout
 ///
-/// | Offset | Size | Field |
-/// |--------|------|-------|
-/// | 0x00 | 4 | `lpLibraryName` (VA to null-terminated DLL name) |
-/// | 0x04 | 4 | `lpFunctionName` (VA to null-terminated API name) |
+/// Verified against MSVBVM60.DLL `sub_660315de` (the `DllFunctionCall` worker):
+/// it dereferences `+0x00` for `LoadLibraryA`, `+0x04` for `GetProcAddress`
+/// by name, `+0x08` for `GetProcAddress` by ordinal (when the by-ordinal flag
+/// is set), and `+0x0C` as a writable resolve cache.
+///
+/// | Offset | Size | Field | Runtime use |
+/// |--------|------|-------|-------------|
+/// | 0x00 | 4 | `lpLibraryName` (VA to null-terminated DLL name) | `LoadLibraryA` |
+/// | 0x04 | 4 | `lpFunctionName` (VA to null-terminated API name) | `GetProcAddress` by name |
+/// | 0x08 | 2 | `wOrdinal` (import ordinal) | `GetProcAddress` by ordinal |
+/// | 0x0A | 2 | `wFlags` — **bit 1 (`0x02`) = resolve by ordinal** | path selector |
+/// | 0x0C | 4 | `lpResolveCache` (`+0x04` HMODULE, `+0x08` proc addr) | populated at first call |
+///
+/// Only the first 8 bytes ([`SIZE`](Self::SIZE)) are required; the ordinal and
+/// flag fields ([`FULL_SIZE`](Self::FULL_SIZE)) are read opportunistically by
+/// [`resolve_api_stub`] and degrade to errors if the backing data is shorter.
 #[derive(Clone, Copy, Debug)]
 pub struct CallApiStub<'a> {
     /// Raw backing bytes borrowed from the PE file buffer.
@@ -49,16 +64,42 @@ pub struct CallApiStub<'a> {
 }
 
 impl<'a> CallApiStub<'a> {
-    /// Size of the CallAPI structure in bytes.
+    /// Minimum size to resolve the DLL and function name pointers (8 bytes).
     pub const SIZE: usize = 8;
 
+    /// Full descriptor size including the ordinal, flags, and resolve cache.
+    ///
+    /// [`resolve_api_stub`] reads this many bytes when available so the
+    /// [`ordinal`](Self::ordinal) and [`is_by_ordinal`](Self::is_by_ordinal)
+    /// accessors have data to work with.
+    pub const FULL_SIZE: usize = 0x10;
+
+    /// Bit in [`flags`](Self::flags) indicating the import resolves by ordinal.
+    ///
+    /// When set, the runtime ignores [`function_name_va`](Self::function_name_va)
+    /// and calls `GetProcAddress` with [`ordinal`](Self::ordinal) instead — the
+    /// API name is absent from the binary, a common API-hiding technique.
+    pub const FLAG_BY_ORDINAL: u16 = 0x0002;
+
     /// Parses a CallApiStub from the given byte slice.
+    ///
+    /// Retains up to [`FULL_SIZE`](Self::FULL_SIZE) bytes when available so the
+    /// ordinal and flag accessors have backing data; only the first
+    /// [`SIZE`](Self::SIZE) bytes are required.
     ///
     /// # Errors
     ///
     /// Returns [`Error::TooShort`] if `data.len() < 8`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+        if data.len() < Self::SIZE {
+            return Err(Error::TooShort {
+                expected: Self::SIZE,
+                actual: data.len(),
+                context: "CallApiStub",
+            });
+        }
+        let end = data.len().min(Self::FULL_SIZE);
+        let bytes = data.get(..end).ok_or(Error::TooShort {
             expected: Self::SIZE,
             actual: data.len(),
             context: "CallApiStub",
@@ -76,6 +117,45 @@ impl<'a> CallApiStub<'a> {
     #[inline]
     pub fn function_name_va(&self) -> Result<u32, Error> {
         read_u32_le(self.bytes, 0x04)
+    }
+
+    /// Import ordinal at offset 0x08.
+    ///
+    /// Only meaningful when [`is_by_ordinal`](Self::is_by_ordinal) is `true`;
+    /// otherwise the import resolves by name and this field is typically `0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TooShort`] if the descriptor was resolved from only
+    /// the minimum [`SIZE`](Self::SIZE) bytes (no ordinal/flags available).
+    #[inline]
+    pub fn ordinal(&self) -> Result<u16, Error> {
+        read_u16_le(self.bytes, 0x08)
+    }
+
+    /// Resolution flags at offset 0x0A.
+    ///
+    /// See [`FLAG_BY_ORDINAL`](Self::FLAG_BY_ORDINAL). Other bits are reserved
+    /// and not yet characterized.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TooShort`] if the descriptor was resolved from only
+    /// the minimum [`SIZE`](Self::SIZE) bytes.
+    #[inline]
+    pub fn flags(&self) -> Result<u16, Error> {
+        read_u16_le(self.bytes, 0x0A)
+    }
+
+    /// Returns `true` if this import resolves by ordinal rather than by name.
+    ///
+    /// By-ordinal imports omit the API name from the binary (the runtime calls
+    /// `GetProcAddress` with the raw [`ordinal`](Self::ordinal)), which is a
+    /// common name-hiding technique worth surfacing during triage. Returns
+    /// `false` if the flags field could not be read (descriptor too short).
+    #[inline]
+    pub fn is_by_ordinal(&self) -> bool {
+        self.flags().is_ok_and(|f| f & Self::FLAG_BY_ORDINAL != 0)
     }
 
     /// Resolves the DLL library name as a lossy UTF-8 string.
@@ -165,7 +245,12 @@ pub fn resolve_api_stub<'a>(map: &AddressMap<'a>, stub_va: u32) -> Result<CallAp
     }
 
     let call_api_va = read_u32_le(stub_data, 1)?;
-    let call_api_data = map.slice_from_va(call_api_va, CallApiStub::SIZE)?;
+    // Prefer the full descriptor (name VAs + ordinal + flags + cache), but fall
+    // back to the 8-byte minimum when the struct sits at the end of a section
+    // and the trailing fields aren't backed by file data.
+    let call_api_data = map
+        .slice_from_va(call_api_va, CallApiStub::FULL_SIZE)
+        .or_else(|_| map.slice_from_va(call_api_va, CallApiStub::SIZE))?;
     CallApiStub::parse(call_api_data)
 }
 
@@ -775,6 +860,23 @@ impl<'a> ExternalDeclareInfo<'a> {
         read_u32_le(self.bytes, 0x0C)
     }
 
+    /// Resolves the `DllFunctionCall` descriptor behind this declare's native stub.
+    ///
+    /// The stub at [`native_stub_va`](Self::native_stub_va) is a
+    /// `push <descriptor>; jmp DllFunctionCall` thunk — the same shape used by
+    /// `ImpAdCall*` constant-pool entries. Resolving it exposes the
+    /// [`CallApiStub::ordinal`] and [`CallApiStub::is_by_ordinal`] fields, so a
+    /// `Declare ... Alias "#123"` ordinal import can be distinguished from a
+    /// by-name import. Returns `None` if the VA can't be resolved or the stub
+    /// doesn't begin with `push imm32`.
+    pub fn api_stub(&self, map: &AddressMap<'a>) -> Option<CallApiStub<'a>> {
+        let va = self.native_stub_va().ok()?;
+        if va == 0 {
+            return None;
+        }
+        resolve_api_stub(map, va).ok()
+    }
+
     /// Resolves the DLL library name string.
     pub fn library_name(&self, map: &AddressMap<'a>) -> Option<&'a str> {
         let va = self.library_name_va().ok()?;
@@ -1144,6 +1246,41 @@ mod tests {
         let stub = CallApiStub::parse(&data).unwrap();
         assert_eq!(stub.library_name_va().unwrap(), 0);
         assert_eq!(stub.function_name_va().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_call_api_stub_minimum_has_no_ordinal() {
+        // An 8-byte (minimum) descriptor still resolves names, but the ordinal
+        // and flag fields are absent and must degrade gracefully.
+        let data = vec![0u8; CallApiStub::SIZE];
+        let stub = CallApiStub::parse(&data).unwrap();
+        assert!(stub.ordinal().is_err());
+        assert!(stub.flags().is_err());
+        assert!(!stub.is_by_ordinal());
+    }
+
+    #[test]
+    fn test_call_api_stub_by_ordinal() {
+        let mut data = vec![0u8; CallApiStub::FULL_SIZE];
+        data[0x00..0x04].copy_from_slice(&0x00401000u32.to_le_bytes()); // lib name VA
+        data[0x04..0x08].copy_from_slice(&0u32.to_le_bytes()); // no func name (by ordinal)
+        data[0x08..0x0A].copy_from_slice(&0x007Bu16.to_le_bytes()); // ordinal 123
+        data[0x0A..0x0C].copy_from_slice(&CallApiStub::FLAG_BY_ORDINAL.to_le_bytes());
+        let stub = CallApiStub::parse(&data).unwrap();
+        assert_eq!(stub.ordinal().unwrap(), 123);
+        assert_eq!(stub.flags().unwrap(), CallApiStub::FLAG_BY_ORDINAL);
+        assert!(stub.is_by_ordinal());
+    }
+
+    #[test]
+    fn test_call_api_stub_by_name() {
+        let mut data = vec![0u8; CallApiStub::FULL_SIZE];
+        data[0x04..0x08].copy_from_slice(&0x00402000u32.to_le_bytes()); // func name VA
+        // flags = 0 → by name
+        let stub = CallApiStub::parse(&data).unwrap();
+        assert_eq!(stub.ordinal().unwrap(), 0);
+        assert_eq!(stub.flags().unwrap(), 0);
+        assert!(!stub.is_by_ordinal());
     }
 
     #[test]
